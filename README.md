@@ -14,6 +14,6 @@
 
 [TrimGalore](https://www.bioinformatics.babraham.ac.uk/projects/trim_galore/)
 
--located on QB3 server @ `/ye/zaitlenlabstore/christacaggiano/trim-galore/TrimGalore-0.4.3`
-- *note* used software added to .bashrc path 
+- located on QB3 server @ `/ye/zaitlenlabstore/christacaggiano/trim-galore/TrimGalore-0.4.3`
+- **note** used software added to .bashrc path 
 
