@@ -1,21 +1,14 @@
 #!/bin/bash
 # this scRNA-seq pipeline accept a input folder, and then use the default parameter for the data processing and analysis, and generate a sparse gene count matrix for downstream analysis                                                                                                                                                                         
-#                                                                                                                                                                                   
-#$ -S /bin/bash                                                                                                                                                                     
-#$ -o /ye/yelabstore/sid/job_logs                                                                                                                                                   
-#$ -e /ye/yelabstore/sid/job_logs                                                                                                                                                   
-#$ -cwd                                                                                                                                                                             
-#$ -r y                                                                                                                                                                             
-#$ -j y                                                                                                                                                                             
-#$ -l mem_free=16G                                                                                                                                                                  
-##$ -l xe5-2640v3=true                                                                                                                                                              
-#$ -l arch=linux-x64                                                                                                                                                                
-##$ -l gpu=1                                                                                                                                                                        
-#$ -l netapp=4G,scratch=4G                                                                                                                                                          
-#$ -l h_rt=24:00:00                                                                                                                                                                 
-#$ -m bea                                                                                                                                                                           
-#$ -M siddharth.raju@ucsf.edu                                                                                                                                                       
-##$ -t 1-10 <sets $SGE_TASK_ID> 
+#                                                                                                                                                                                                                                                                                                                     
+#$ -S /bin/bash                     
+#$ -cwd                            
+#$ -r y                            
+#$ -j y                           
+#$ -l mem_free=25G                 
+#$ -l arch=linux-x64               
+#$ -l netapp=2G,scratch=2G         
+#$ -l h_rt=24:00:00  
 
 ##sample_ID=$3 # the sample ID for each PCR samples after demultiplex
 sample_ID=$1 # the sample ID for each PCR samples after demultiplex
@@ -26,12 +19,12 @@ core=$3 # core number for computation
 ##cutoff=$6  # the number of unique reads cutoff for splitting single cells
 cutoff=$4  # the number of unique reads cutoff for splitting single cells
 ##index=$8 # STAR index for mapping
-index=$5 # STAR index for mapping
-
+index="/ye/netapp/jimmie.ye/ref/star"
+ 
 barcodes=/ye/yelabstore2/spatial/sid/v1/XYZ_plate3_barcodes.csv # the RT barcode list for splitting single cells
 fastq_folder=/ye/yelabstore2/spatial/sid/v1/fastq_gz_all # the folder for fastq files
-all_output_folder=/ye/yelabstore2/spatial/sid/v1/sci_output # the output folder
-script_folder=/ye/yelabstore2/spatial/sid/py_scripts # the script folder for called python scripts
+all_output_folder=/ye/yelabstore2/christa/try2 # the output folder
+script_folder=/ye/yelabstore2/christa/py_scripts # the script folder for called python scripts
 
 #define the mismatch rate (edit distance) of UMIs for removing duplicates:
 
@@ -43,25 +36,25 @@ python_path="/ye/netapp/jimmie.ye/tools/"
 #define the location of script:
 script_path=$script_folder
 
-module load samtools/1.3
-module load bedtools/2.24.0
+# module load samtools/1.3
+# module load bedtools/2.24.0
 
 ############ RT barcode and UMI attach
 # this script take in a input folder, a sample ID, a output folder, a oligo-dT barcode file and
-# call the python script to extract the UMI and RT barcode from read1 and attach them to the read names# of read2
-input_folder=$fastq_folder
-output_folder=$all_output_folder/UMI_attach
-script=$script_folder/UMI_barcode_attach_gzipped.py
-echo "changing the name of the fastq files..."
+# # call the python script to extract the UMI and RT barcode from read1 and attach them to the read names# of read2
+# input_folder=$fastq_folder
+# output_folder=$all_output_folder/UMI_attach
+# script=$script_folder/UMI_barcode_attach_gzipped.py
+# echo "changing the name of the fastq files..."
 
-for sample in $(cat $sample_ID); do echo changing name $sample; mv $input_folder/$sample*R1*gz $input_folder/$sample.R1.fastq.gz; mv $input_folder/$sample*R2*gz $input_folder/$sample.R2.fastq.gz; done
+# # for sample in $(cat $sample_ID); do echo changing name $sample; mv $input_folder/$sample*R1*gz $input_folder/$sample.R1.fastq.gz; mv $input_folder/$sample*R2*gz $input_folder/$sample.R2.fastq.gz; done
 
-echo "Attaching barcode and UMI...."
-mkdir -p $output_folder
-$python_path/python27 $script $input_folder $sample_ID $output_folder $barcodes $core
-echo "Barcode transformed and UMI attached."
+# echo "Attaching barcode and UMI...."
+# mkdir -p $output_folder
+# $python_path/python27 $script $input_folder $sample_ID $output_folder $barcodes $core
+# echo "Barcode transformed and UMI attached."
 
-################# Trim the read2
+# ################# Trim the read2
 # echo
 # echo "Start trimming the read2 file..."
 # echo $(date)
@@ -71,8 +64,8 @@ echo "Barcode transformed and UMI attached."
 # mkdir $all_output_folder/trimmed_fastq
 # trimmed_fastq=$all_output_folder/trimmed_fastq
 # UMI_attached_R2=$all_output_folder/UMI_attach
-# for sample in $(cat $sample_ID); do echo trimming $sample; sem -j $core trim_galore $UMI_attached_R2/$sample*.gz -a AAAAAAAA --three_prime_clip_R1 1 -o $trimmed_fastq; done
-# sem --semaphoretimeout 1800
+# for sample in $(cat $sample_ID); do echo trimming $sample; trim_galore $UMI_attached_R2/$sample*.gz -a AAAAAAAA --three_prime_clip_R1 1 -o $trimmed_fastq; done
+# # sem --semaphoretimeout 1800
 # echo "All trimmed file generated."
 # module unload python/2.7.3
 
@@ -90,14 +83,16 @@ echo input folder: $input_folder
 echo sample ID file: $sample_ID
 echo index file: $index
 echo output_folder: $STAR_output_folder
+
+STAR="/ye/netapp/jimmie.ye/tools/STAR/bin/Linux_x86_64/STAR"
 #make the output folder
 mkdir -p $STAR_output_folder
 #remove the index from the memory
-STAR --genomeDir $index --genomeLoad Remove
+$STAR --genomeDir $index --genomeLoad Remove
 #start the alignment
-for sample in $(cat $sample_ID); do echo Aligning $sample;STAR --runThreadN $core --outSAMstrandField intronMotif --genomeDir $index --readFilesCommand zcat --readFilesIn $input_folder/$sample*gz --outFileNamePrefix $STAR_output_folder/$sample --genomeLoad LoadAndKeep; done
+for sample in $(cat $sample_ID); do echo Aligning $sample;$STAR --runThreadN $core --outSAMstrandField intronMotif --genomeDir $index --readFilesCommand zcat --readFilesIn $input_folder/$sample*gz --outFileNamePrefix $STAR_output_folder/$sample --genomeLoad LoadAndKeep; done
 #remove the index from the memory
-STAR --genomeDir $index --genomeLoad Remove
+$STAR --genomeDir $index --genomeLoad Remove
 echo "All alignment done."
 
 # filter and sort the sam file
@@ -191,7 +186,7 @@ echo "Read number calculation is done."
 output_folder=$all_output_folder/report/human_mouse_gene_count/
 core_number=$core
 
-script=$script_folder/sciRNAseq_count.py
+script=$script_folder/sciRNAse3q_count.py
 echo "Start the gene count...."
 $python_path/python $script $gtf_file $input_folder $sample_ID $core_number
 
