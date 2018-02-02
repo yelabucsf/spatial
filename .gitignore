@@ -1,0 +1,25 @@
+# Created by https://www.gitignore.io/api/linux
+
+### Linux ###
+*~
+
+# temporary files which can be created if a process still has a handle open of a deleted file
+.fuse_hidden*
+
+# KDE directory preferences
+.directory
+
+# Linux trash folder which might appear on any partition or disk
+.Trash-*
+
+# .nfs files are created when an open file is removed but is still being accessed
+.nfs*
+
+star_alignment/9bp_with_trimming/* 
+star_alignment/inferred_adpater_trimming/*
+star_alignment/more_gb/* 
+star_alignment/trimming_relaxed/* 
+star_alignment/scrna.sh.o* 
+star_alignment/scRNA_default_trimming/* 
+
+# End of https://www.gitignore.io/api/linux
