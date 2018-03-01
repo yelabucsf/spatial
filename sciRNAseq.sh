@@ -80,9 +80,17 @@ mkdir -p $STAR_output_folder
 
 for sample in $(cat $sample_ID); do 
 	
-	if $STAR --runThreadN $core --outSAMstrandField intronMotif --genomeDir $index 
-				--readFilesCommand zcat --readFilesIn $input_folder/$sample*gz 
-				--outFileNamePrefix $STAR_output_folder/$sample then
+	if $STAR --genomeDir /ye/yelabstore2/christa/PHIX --outSAMstrandField intronMotif --readFilesCommand zcat 
+		--readFilesIn $input_folder/$sample*gz  --runThreadN 10 --outReadsUnmapped Fastx 
+		--outFilterScoreMinOverLread 0.3 --outFilterMatchNminOverLread 0.3 then 
+
+		cp "Log.final.out" "Log.final.phix"
+
+		$STAR --genomeDir $index --outFilterScoreMinOverLread 0.3 --outFilterMatchNminOverLread 0.3  
+		--outSAMstrandField intronMotif  --readFilesIn Unmapped* --runThreadN 6
+
+		cp "Log.final.out" "Log.final.mm10"
+
 		echo $sample aligned successfully 
 
 	else 
