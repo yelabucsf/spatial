@@ -1,19 +1,46 @@
-# spatial sequencing project 
-## jan 2018 
-## notes by C Caggiano while in development
+# Spatial Seq Project @ the Ye Lab
 
+### About
 
-### Software used so far: 
+Pipeline for analyzing single cell RNA-seq data with spatial information. Adapted from pipeline @ the Trapnell lab
 
-[STAR](https://github.com/alexdobin/STAR)
+### Use
 
-- located on QB3 server @ `/ye/netapp/jimmie.ye/tools/STAR`
-- transcriptome build here `/ye/yelabstore/10x.ref/refdata-cellranger-mm10-1.2.0/star`
-- assessed/ used "relaxed" parameters used [here](https://github.com/alexdobin/STAR/issues/169)
+`qsub ./sciRNAseq.sh`
 
+### Software Requirements
 
-[TrimGalore](https://www.bioinformatics.babraham.ac.uk/projects/trim_galore/)
+The following packages must be installed:
+* [STAR](https://github.com/alexdobin/STAR) - Spliced Transcript Read Aligner  
+* [TrimGalore](https://www.bioinformatics.babraham.ac.uk/projects/trim_galore/) - Read trimming software from Babraham Bioinformatics
+* [SAMtools](http://samtools.sourceforge.net/) - suite of tools for interacting with sequencing data in SAM/BAM format
+* [Python2](https://www.python.org/downloads/) - We know Python2 is kind of dumb, but this is just how it is right now
 
-- located on QB3 server @ `/ye/zaitlenlabstore/christacaggiano/trim-galore/TrimGalore-0.4.3`
-- **note** used software added to .bashrc path 
+**Scripts** - /scripts/ - python path of scripts for this pipeline must be available for the pipeline
 
+All required software paths should be put added to `parameters.sh`
+
+Required parameters are:
+
+```bash
+# Pipeline parameters
+
+$gtf_file="/gtf/path" # file path of gtf file
+$script_path="folder/of/python/scripts" # location of python files to be used
+$core=6 # number of cores to be used for experiment
+$cutoff=1 # number of reads
+$mismatch=1 # number of mismatches allowed between 'real'  and barcode and barcode observed in R2
+$STAR="/path/to/star/executable/STAR" # path to STAR aligner
+$trim_galore_path="/path/to/trimgalore/exe/TrimGalore" # path to trim galore
+```
+
+```bash
+# Experiment parameters
+
+$sample_ID="sample_id.txt" # file containing sample ID names
+$barcodes="/folder/of/python/scripts" # location of python files to be used
+$fastq_folder="/path/to/folder/with/fastq" # folder containing fastq.gz files
+$all_output_folder="/output/folder" # output from file
+```
+
+To check the installation of these packages use `requirements.sh`
