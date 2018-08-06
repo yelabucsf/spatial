@@ -1,0 +1,11 @@
+1, Perfect intersect exon match
+2, Nearest intersect exon match
+3, Perfect combine exon match
+4, Nearest combine exon match
+5, Perfect intersect gene match
+6, Nearest intersect gene match
+7, Perfect combine gene match
+8, Nearest combine gene match
+9, ambiguous match for exons
+10, ambiguous match for genes
+11, No match
