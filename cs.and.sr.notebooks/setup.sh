@@ -10,7 +10,7 @@ wget https://boygeniusreport.files.wordpress.com/2016/11/puppy-dog.jpg /myvol/da
 
 # install pip3
 apt install python3-pip
-pip3 install jupyterlab numpy scipy matplotlib cvxpy ipywidgets
+pip3 install jupyterlab numpy scipy matplotlib cvxpy tqdm ipywidgets
 
 # for tqdm_notebook to work in jupyter labs, need ipywidgets and the jupyter extension which requires nodejs and npm
 apt install nodejs
