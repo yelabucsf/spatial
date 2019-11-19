@@ -1,0 +1,1 @@
+In this first iteration, I ran multiple notebooks, making iterative versions of the combined adata, iteratively removing cells from each version that seemed to be artifactual. I eventually ended up with an okay-looking UMAP but only a handful of broad cell types.
