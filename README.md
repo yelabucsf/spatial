@@ -40,27 +40,42 @@ All figure panels are in bold. Figure panels that have been reproduced successfu
 
 #### 1
 _A (Illustrator)_
+
 _B (Illustrator)_
+
 C
+
 D
+
 E
 
 #### 2
 A
+
 B
+
 _C (image)
+
 D
 
 #### 3
 A
+
 B
+
 C
+
 D
+
 E
+
 F
 
 #### 4
 A
+
 B
+
 C
+
 D
