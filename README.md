@@ -38,44 +38,44 @@ Right before we're ready to publish, I will open a new AWS machine, follow the i
 
 All figure panels are in bold. Figure panels that have been reproduced successfully should be changed to italics. If you feel a certain panel doesn't really require a notebook to reproduce (e.g. it's just an image of the liver slice, or it was chiefly made in Illustrator), please also italicize it.
 
-#### 1
-_A (Illustrator)_
+### 1
+**_A (Illustrator)_**
 
-_B (Illustrator)_
+**_B (Illustrator)_**
 
-C
+**C**
 
-D
+**D**
 
-E
+**E**
 
 #### 2
-A
+**A**
 
-B
+**B**
 
-_C (image)
+**_C (image)_**
 
-D
+**D**
 
 #### 3
-A
+**A**
 
-B
+**B**
 
-C
+**C**
 
-D
+**D**
 
-E
+**E**
 
-F
+**F**
 
 #### 4
-A
+**A**
 
-B
+**B**
 
-C
+**C**
 
-D
+**D**
