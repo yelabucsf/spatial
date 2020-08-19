@@ -45,21 +45,43 @@ All figure panels are in bold. Figure panels that have been reproduced successfu
 
 **C**
 
-**D**
+**_D_**
 
-**E**
+**_E_**
 
 #### 2
-**A**
+**_A_**
 
-**B**
+**_B_**
 
 **_C (image)_**
 
 **D**
 
 #### 3
-**A**
+**_A_**
+
+**B**
+
+**_C_**
+
+**D**
+
+**_E_**
+
+**_F_**
+
+#### 4
+**_A_**
+
+**B**
+
+**C**
+
+**D**
+
+### S1
+**_A (image)_**
 
 **B**
 
@@ -69,9 +91,24 @@ All figure panels are in bold. Figure panels that have been reproduced successfu
 
 **E**
 
-**F**
+### S2
+**A**
 
-#### 4
+**B**
+
+### S3
+**A**
+
+**B**
+
+**C**
+
+### S4
+**A**
+
+**_B_**
+
+### S5
 **A**
 
 **B**
