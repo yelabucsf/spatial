@@ -1,2 +1,4 @@
 .ipynb_checkpoints
 path.to.data.txt
+__pycache__
+cache
