@@ -117,7 +117,7 @@ ggplot(mouse_human_decont_merge_long, aes(x = count)) +
     theme_bw() +
     theme(legend.position = "bottom")
   
-ggsave("~/Documents/Github/spatial-genomics/fig/contamination/toc_compare_decontx.png")
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/mouse_human-compare.png")
 @
 
 
