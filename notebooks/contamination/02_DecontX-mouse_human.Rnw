@@ -1,0 +1,124 @@
+\documentclass{article}
+
+\begin{document}
+
+<<>>=
+library(celda)
+library(tidyverse)
+library(loomR)
+# library(Seurat)
+
+# library(devtools)
+# Use devtools to install hdf5r and loomR from GitHub
+# devtools::install_github(repo = "hhoeflin/hdf5r")
+# devtools::install_github(repo = "mojaveazure/loomR", ref = "develop", force = T)
+@
+
+<<>>=
+setwd("~/Documents/projects/spatial-genomics")
+lfile <- connect(filename = "./data/all_batches_concat.loom", mode = "r+", skip.validate = TRUE)
+# lfile[["matrix"]]
+# dim(lfile[["matrix"]][,]) # 10280 cells by 55346 genes
+# lfile[["col_attrs"]] # cell
+# lfile[["row_attrs"]] # gene
+# lfile$row.attrs$var_names[1:5]
+# range(lfile[["matrix"]][1:10280, grep("mm10_", lfile$row.attrs$var_names[])])
+# length(grep("mm10_", lfile$row.attrs$var_names[])) # 24976 mouse genes
+
+full_matrix <- lfile[["matrix"]][, ]
+dim(x = full_matrix) # 10280 cells by 55346 genes
+# full_var <- lfile$row.attrs
+# full_obs <- lfile$col.attrs
+gene_names <- lfile[["row_attrs/var_names"]][]
+# head(x = gene_names)
+cell_names <- lfile[["col_attrs/obs_names"]][]
+# head(x = cell_names)
+cell_types <- lfile[["col_attrs/CellType"]][]
+table(cell_types)
+rownames(full_matrix) <- cell_names <- make.names(cell_names, allow_ = F)
+colnames(full_matrix) <- gene_names
+
+@
+
+<<>>=
+mouse_human_decont <- decontX(x = as.matrix(t(full_matrix)), z = cell_types)
+length(mouse_human_decont$contamination)
+
+mouse_human_decont_df <- data.frame(cell_iden = cell_names,
+                                    cell_type = cell_types, 
+                                    count = mouse_human_decont$contamination)
+write.csv(mouse_human_decont_df, file = "~/Documents/Github/spatial-genomics/data/mouse_human-before.csv")
+
+ggplot(mouse_human_decont_df, aes(x = cell_type, y = count)) +
+  geom_violin(colour = "red") + 
+  geom_jitter(shape = 16, position=position_jitter(0.2), size = 0.3, alpha = 0.3) +
+  theme_bw() +
+  ylab("Estimated contamination fraction in each cell") +
+  xlab("Cell type")
+
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/mouse_human-before.png")
+
+mouse_human_decont_df %>% group_by(cell_type) %>%
+  summarise(median = median(count, na.rm = T))
+
+# rm(mouse_human_decont)
+@
+
+<<remove-59-contaminated-genes>>=
+hek293t_contam_result <- read.csv("~/Documents/projects/spatial-genomics/data/hek293t_contam_result.csv", row.names = 1)
+contam_genes <- hek293t_contam_result[hek293t_contam_result$contam == T, "gene_name"]
+
+dim(full_matrix) # 10280 cells by 55346 genes
+full_matrix_update <- full_matrix[, ! colnames(full_matrix) %in% contam_genes]
+nonzero_cells <- which(rowSums(full_matrix_update) != 0) # 4 cells with zero counts
+# sum(rownames(toc_x) == toc_obs$cell_iden)
+full_matrix_new <- full_matrix_update[nonzero_cells, ] # 10280 cells by 55287 genes
+dim(full_matrix_new)
+cell_types_new <- cell_types[nonzero_cells]
+cell_names_new <- cell_names[nonzero_cells]
+
+# rm(full_matrix_update, nonzero_cells, full_matrix, gene_names, cell_names)
+mouse_human_decont_new <- decontX(x = as.matrix(t(full_matrix_new)), z = cell_types_new)
+
+mouse_human_decont_new_df <- data.frame(cell_iden = cell_names_new,
+                                        cell_type = cell_types_new, 
+                                        count = mouse_human_decont_new$contamination)
+write.csv(mouse_human_decont_new_df, file = "~/Documents/Github/spatial-genomics/data/mouse_human-after.csv")
+
+ggplot(mouse_human_decont_new_df, aes(x = cell_type, y = count)) +
+  geom_violin(colour = "blue") + 
+  geom_jitter(shape = 16, position=position_jitter(0.2), size = 0.3, alpha = 0.3) +
+  theme_bw() +
+  ylab("Estimated contamination fraction in each cell") +
+  xlab("Cell type")
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/mouse_human-after.png")
+
+mouse_human_decont_new_df %>% group_by(cell_type) %>%
+  summarise(median = median(count, na.rm = T))
+
+mouse_human_decont_merge <- left_join(mouse_human_decont_df, 
+                                      mouse_human_decont_new_df[, c("cell_iden", "count")], 
+                                      by = "cell_iden")
+
+mouse_human_decont_merge_long <- reshape(mouse_human_decont_merge, 
+                                 direction = "long",
+                                 varying = c("count.x", "count.y"), 
+                                 idvar = "cell_iden")
+
+
+ggplot(mouse_human_decont_merge_long, aes(x = count)) +
+    geom_density(aes(color = time), alpha = 0.7) +
+    facet_wrap(~ cell_type) +
+    scale_color_manual(name = "Remove contaminated genes", 
+                         breaks = c("x", "y"),
+                         label = c("before", "after"),
+                         values = c("red", "blue")) +
+    xlab("estimated contamination rate per cell") +
+    theme_bw() +
+    theme(legend.position = "bottom")
+  
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/mouse_human-compare.png")
+@
+
+
+\end{document}
