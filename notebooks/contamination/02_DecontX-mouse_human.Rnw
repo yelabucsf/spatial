@@ -6,12 +6,6 @@
 library(celda)
 library(tidyverse)
 library(loomR)
-# library(Seurat)
-
-# library(devtools)
-# Use devtools to install hdf5r and loomR from GitHub
-# devtools::install_github(repo = "hhoeflin/hdf5r")
-# devtools::install_github(repo = "mojaveazure/loomR", ref = "develop", force = T)
 @
 
 <<>>=
@@ -107,8 +101,8 @@ mouse_human_decont_merge_long <- reshape(mouse_human_decont_merge,
 
 
 ggplot(mouse_human_decont_merge_long, aes(x = count)) +
-    geom_density(aes(color = time), alpha = 0.7) +
-    facet_wrap(~ cell_type) +
+   geom_line(aes(colour=time), stat = "density", alpha=0.5) +  
+    facet_wrap(~ cell_type, scales = "free") +
     scale_color_manual(name = "Remove contaminated genes", 
                          breaks = c("x", "y"),
                          label = c("before", "after"),
@@ -118,6 +112,74 @@ ggplot(mouse_human_decont_merge_long, aes(x = count)) +
     theme(legend.position = "bottom")
   
 ggsave("~/Documents/Github/spatial-genomics/fig/contamination/mouse_human-compare.png")
+@
+
+<<barnyard-plot>>=
+decont_mat_after <- mouse_human_decont_new$decontXcounts
+write.csv(decont_mat_after, file = "~/Documents/Github/spatial-genomics/data/decont_data_mat_after.csv")
+
+dim(decont_mat_after) # 55287 genes by 10280 cells
+mouse_genes_idx_after <- grep("mm10", rownames(decont_mat_after))
+human_genes_idx_after <- grep("hg19", rownames(decont_mat_after))
+mouse_sum_after <- Matrix::colSums(decont_mat_after[mouse_genes_idx_after,])
+human_sum_after <- Matrix::colSums(decont_mat_after[human_genes_idx_after, ])
+sum_after <- data.frame("cell_iden" = colnames(decont_mat_after),
+                   "mouse" = mouse_sum_after,
+                   "human" = human_sum_after)
+write.csv(sum_after, file = "~/Documents/Github/spatial-genomics/data/mixture-after.csv")
+@
+
+
+<<>>=
+decont_mat_before <- full_matrix
+dim(decont_mat_before) # 10280 cells by 55346 genes
+mouse_genes_idx_before <- grep("mm10", colnames(decont_mat_before))
+human_genes_idx_before <- grep("hg19", colnames(decont_mat_before))
+mouse_sum_before <- Matrix::rowSums(decont_mat_before[,mouse_genes_idx_before])
+human_sum_before <- Matrix::rowSums(decont_mat_before[,human_genes_idx_before])
+sum_before <- data.frame("cell_iden" = rownames(decont_mat_before),
+                   "mouse" = mouse_sum_before,
+                   "human" = human_sum_before)
+write.csv(sum_before, file = "~/Documents/Github/spatial-genomics/data/mixture-before.csv")
+@
+
+<<>>=
+# fake / empty legend
+legend_data <- data.frame(null_x = rep(0, 4), 
+                          null_y = rep(0, 4),
+                          legend = c("magenta", "darkgreen",
+                                     "orange", "gray"))
+
+ggplot(legend_data, aes(x = null_x, y = null_y, color = legend)) +
+  geom_point(alpha = 0) + 
+    geom_point(data = sum_before,
+               aes(x = human, y = mouse),# shape = "Original"
+               color = ifelse(cell_types == "Hek293t",
+                              "magenta", "darkgreen"),
+               size = 0.1,
+               alpha = 0.5) +
+  geom_point(data = sum_after,
+             aes(x = human, y = mouse),# shape = "Decontaminated"
+             color = ifelse(cell_types_new == "Hek293t",
+                            "orange", "gray"),
+             size = 0.1,
+             alpha = 0.3) +
+  scale_color_manual(breaks = c("magenta", "darkgreen",
+                                     "orange", "gray"),
+                     values = c("magenta", "darkgreen",
+                                     "orange", "gray"),
+                     labels = c("Human: original counts",
+                               "Mouse: original counts",
+                               "Human: decontaminated counts",
+                               "Mouse: decontaminated counts"),
+                     guide = guide_legend(nrow = 2, title = "Cell Type",
+                                         override.aes = list(alpha = 1))) +
+  xlab("hg19 counts") +
+  ylab("mm10 counts") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/mixture.png")
 @
 
 
