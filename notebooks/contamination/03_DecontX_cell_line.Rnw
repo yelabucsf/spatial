@@ -1,0 +1,240 @@
+\documentclass{article}
+
+\begin{document}
+
+<<packages>>=
+library("reticulate")
+use_python("/Applications/anaconda3/bin/python3", required = T)
+sc <- import("scanpy")
+
+library(celda) # DecontX
+library(tidyverse)
+library(loomR)
+library(Seurat)
+library(latex2exp)
+@
+
+<<data>>=
+setwd("~/Documents/Github/spatial-genomics")
+adata <- sc$read_h5ad("./data/293t_3t3_cell_line_processed.h5ad")
+# this is only one experiment/batch
+
+mat <- adata$X
+range(mat) # 0 1763
+dim(mat) # 6447 cells and 121472 genes
+cell_names <- adata$obs_names$to_list()
+rownames(mat) <- cell_names <- make.names(cell_names, allow_ = F)
+colnames(mat) <- gene_names <- adata$var_names$to_list()
+cell_types <- adata$obs$CellType
+table(cell_types)
+   #  3T3 Hek293t 
+   # 2292    4155 
+@
+
+<<decont>>=
+dim(mat) # 6447 cells by 121472 genes
+
+mat_decont <- decontX(x = t(as.matrix(mat)), z = cell_types)
+decont_df <- data.frame(cell_iden = cell_names,
+                        cell_type = cell_types, 
+                        count = mat_decont$contamination)
+
+ggplot(decont_df, aes(x = cell_type, y = count)) +
+  geom_violin(aes(colour = cell_type)) + 
+  geom_jitter(shape = 16, position=position_jitter(0.2), size = 0.3, alpha = 0.3) +
+  theme_bw() +
+  ylab("Estimated contamination fraction in each cell") +
+  xlab("Cell type") +
+  ggtitle("Median: 0.02 (3T3), 0.00502 (Hek293t)") +
+  scale_color_manual(breaks = c("3T3", "Hek293t"),
+                     values = c("#dc2f02", "blue")) +
+  theme(legend.position = "none")
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/cell_line_violin.png")
+
+decont_df %>% group_by(cell_type) %>%
+  summarise(median = median(count, na.rm = T))
+# cell_type  median
+# 3T3       0.0200 
+# Hek293t   0.00502
+@
+
+<<barnyard-data>>=
+decont_mat_after <- mat_decont$decontXcounts
+write.csv(as.matrix(decont_mat_after), file = "~/Documents/projects/spatial-genomics/decontam/293t_3t3_cell_line_decontam/293t_3t3_cell_line_decont_v1.csv")
+dim(decont_mat_after)  # 121472 genes by 6447 cells
+
+mouse_genes_idx_after <- grep("mm10", rownames(decont_mat_after))
+human_genes_idx_after <- grep("hg19", rownames(decont_mat_after))
+# introns are included as well
+
+mouse_sum_after <- Matrix::colSums(decont_mat_after[mouse_genes_idx_after,])
+human_sum_after <- Matrix::colSums(decont_mat_after[human_genes_idx_after, ])
+sum_after <- data.frame("cell_iden" = colnames(decont_mat_after),
+                        "mouse" = mouse_sum_after,
+                        "human" = human_sum_after)
+
+mouse_genes_idx_before <- grep("mm10", colnames(mat))
+human_genes_idx_before <- grep("hg19", colnames(mat))
+mouse_sum_before <- Matrix::rowSums(mat[, mouse_genes_idx_before])
+human_sum_before <- Matrix::rowSums(mat[, human_genes_idx_before])
+sum_before <- data.frame("cell_iden" = rownames(mat),
+                         "mouse" = mouse_sum_before,
+                         "human" = human_sum_before)
+@
+
+<<barnyard-plot>>=
+legend_data <- data.frame(null_x = rep(0, 4), 
+                          null_y = rep(0, 4),
+                          legend = c("#a0c4ff", "#faa307",
+                                     "blue", "#ef233c"))
+# ef233c - red, a0c4ff - light blue, faa307 - orange
+
+Barnyard_layers <- function()
+  list(geom_point(alpha = 0),
+  scale_color_manual(breaks = c("#a0c4ff", "#faa307", "blue", "#ef233c"),
+                     values = c("#a0c4ff", "#faa307", "blue", "#ef233c"),
+                     labels = c("Hek293t: original counts", 
+                                "3T3: original counts",
+                               "Hek293t: decontaminated counts", 
+                               "3T3: decontaminated counts"),
+                     guide = guide_legend(nrow = 2, title = "Cell Type",
+                                         override.aes = list(alpha = 1))),
+  ylab("hg19 counts"),
+  xlab("mm10 counts"),
+  theme_bw())
+
+ggplot(legend_data, aes(x = null_x, y = null_y, color = legend)) +
+      geom_point(data = sum_before, aes(x = mouse, y = human),
+               color = ifelse(cell_types == "Hek293t", "#a0c4ff", "#faa307"),
+               size = 0.3, alpha = 0.5) +
+  geom_point(data = sum_after, aes(x = mouse, y = human),
+             color = ifelse(cell_types == "Hek293t", "blue", "#ef233c"),
+             size = 0.3, alpha = 0.3) +
+  Barnyard_layers() +
+  theme(legend.position = "bottom")
+
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/cell_line_barnyard.png")
+@
+
+<<barnyard-side-by-side>>=
+# sum(sum_before$cell_iden == rownames(adata$obs))
+# sum(sum_after$cell_iden == rownames(adata$obs))
+sum_before$cell_types <- sum_after$cell_types <- adata$obs$CellType
+sum_before$decont <- rep(as.factor("Original counts"), nrow(sum_before))
+sum_after$decont <- rep(as.factor("Decontaminated counts"), nrow(sum_after))
+sum_all <- rbind(sum_before, sum_after)
+
+ggplot(data = sum_all, aes(x = mouse, y = human)) +
+  geom_point(size = 0.7, aes(color = cell_types)) +
+  facet_wrap(~ decont) +
+  xlab("mm10 counts") +
+  ylab("hg19 counts") +
+  scale_color_manual(breaks = c("Hek293t", "3T3"),
+                     values = c("blue", "#ef233c"),
+                     guide = guide_legend(nrow = 1, title = "Cell Type",
+                                         override.aes = list(alpha = 1))) +
+  theme_bw() +
+  theme(legend.position = "bottom")
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/cell_line_barnyard_side_by_side.png")
+
+@
+
+<<supplement-fig-x>>=
+ggplot(legend_data, aes(x = null_x, y = null_y, color = legend)) +
+    geom_point(data = sum_before, aes(x = mouse, y = human),
+               color = ifelse(cell_types == "Hek293t", "#a0c4ff", "#faa307"),
+               size = 2, alpha = 0.5) +
+  geom_point(data = sum_after, aes(x = mouse, y = human),
+             color = ifelse(cell_types == "Hek293t", "blue", "#ef233c"),
+             size = 2, alpha = 0.3) +
+  Barnyard_layers() +
+  theme(legend.position = "none",
+        axis.title = element_blank(),
+        text = element_text(size=20)) +
+  xlim(500, 2000) +
+  ylim(0, 400)
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/cell_line_barnyard_x_supplement.png")
+@
+
+<<supplement-fig-y>>=
+ggplot(legend_data, aes(x = null_x, y = null_y, color = legend)) +
+  geom_point(data = sum_before, aes(x = mouse, y = human),
+               color = ifelse(cell_types == "Hek293t", "#a0c4ff", "#faa307"),
+               size = 2, alpha = 0.5) +
+  geom_point(data = sum_after, aes(x = mouse, y = human),
+             color = ifelse(cell_types == "Hek293t", "blue", "#ef233c"),
+             size = 2, alpha = 0.3) +
+  Barnyard_layers() +
+  theme(legend.position = "none",
+        axis.title = element_blank(),
+        text = element_text(size=20)) +
+  xlim(0, 200) +
+  ylim(1500, 5000)
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/cell_line_barnyard_y_supplement.png")
+@
+
+<<remove-contaminated-mouse-genes-in-hek293t>>=
+hek293t_profile_pre <- Matrix::colSums(mat[cell_types == "Hek293t", 
+                                        grep("mm10", colnames(mat))])
+profile_order <- order(hek293t_profile_pre, decreasing = T)
+hek293t_profile <- data.frame(counts = hek293t_profile_pre[profile_order])
+write.csv(hek293t_profile, file = "~/Documents/projects/spatial-genomics/decontam/293t_3t3_cell_line_decontam/hek293t_profile.csv")
+@
+
+<<performance-hek293t>>=
+# proportion of mouse transcripts in hek293t human cells
+hek293t_mat_prop <- Matrix::rowSums(mat[cell_types == "Hek293t", 
+                           grep("mm10", colnames(mat))]) / Matrix::rowSums(mat[cell_types == "Hek293t", ])
+
+# sum(mat_decont$estimates$all_cells$contamination == mat_decont$contamination) # 6447
+all_cont_rate <- mat_decont$estimates$all_cells$contamination
+# sum(names(all_cont_rate) == rownames(mat)) # 6447
+hek293t_est_cont <- all_cont_rate[cell_types == "Hek293t"]
+
+
+hek293t_df <- data.frame("prop" = hek293t_mat_prop, "est_cont" = hek293t_est_cont)
+
+cor(hek293t_df$prop, hek293t_df$est_cont)
+
+# cosine similarity
+sum(hek293t_df$prop * hek293t_df$est_cont)/sqrt(sum(hek293t_df$prop ^ 2)*sum(hek293t_df$est_cont ^2))
+
+ggplot(hek293t_df, aes(x = hek293t_mat_prop, y = hek293t_est_cont)) +
+  geom_point(size = 0.7, color = "blue") +
+  theme_bw() +
+  ggtitle(TeX('Hek293t cells: r = 0.993, $S_C$ = 0.9916')) +
+  xlab("Proportion of mm10 transcripts") +
+  ylab("Estimated contamination")
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/cell_line_hek293t.png")
+@
+
+<<performance-3t3>>=
+# proportion of human transcripts in 3T3 mouse cells
+mouse_mat_prop <- Matrix::rowSums(mat[cell_types == "3T3", 
+                           grep("hg19", colnames(mat))]) / Matrix::rowSums(mat[cell_types == "3T3", ])
+
+mouse_est_cont <- all_cont_rate[cell_types == "3T3"]
+
+
+mouse_df <- data.frame("prop" = mouse_mat_prop, "est_cont" = mouse_est_cont)
+
+cor(mouse_df$prop, mouse_df$est_cont)
+
+# cosine similarity
+sum(mouse_df$prop * mouse_df$est_cont)/sqrt(sum(mouse_df$prop ^ 2)*sum(mouse_df$est_cont ^2))
+
+
+ggplot(mouse_df, aes(x = mouse_mat_prop, y = mouse_est_cont)) +
+  geom_point(size = 0.7, color = "#dc2f02") +
+  theme_bw() +
+  ggtitle(TeX('3T3 cells: r = 0.9997, $S_C$ = 0.9989')) +
+  xlab("Proportion of hg19 transcripts") +
+  ylab("Estimated contamination")
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/cell_line_3t3.png")
+
+mouse_cell_names <- cell_names[cell_types == "3T3"]
+mouse_cell_names[which(mouse_mat_prop > 0.95)]
+@
+
+
+\end{document}
