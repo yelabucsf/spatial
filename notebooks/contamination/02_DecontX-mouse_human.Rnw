@@ -6,132 +6,174 @@
 library(celda)
 library(tidyverse)
 library(loomR)
+library(latex2exp)
+# library(Seurat)
 @
 
 <<>>=
 setwd("~/Documents/projects/spatial-genomics")
 lfile <- connect(filename = "./data/all_batches_concat.loom", mode = "r+", skip.validate = TRUE)
-# lfile[["matrix"]]
-# dim(lfile[["matrix"]][,]) # 10280 cells by 55346 genes
-# lfile[["col_attrs"]] # cell
-# lfile[["row_attrs"]] # gene
-# lfile$row.attrs$var_names[1:5]
-# range(lfile[["matrix"]][1:10280, grep("mm10_", lfile$row.attrs$var_names[])])
-# length(grep("mm10_", lfile$row.attrs$var_names[])) # 24976 mouse genes
 
 full_matrix <- lfile[["matrix"]][, ]
 dim(x = full_matrix) # 10280 cells by 55346 genes
-# full_var <- lfile$row.attrs
-# full_obs <- lfile$col.attrs
 gene_names <- lfile[["row_attrs/var_names"]][]
-# head(x = gene_names)
 cell_names <- lfile[["col_attrs/obs_names"]][]
-# head(x = cell_names)
 cell_types <- lfile[["col_attrs/CellType"]][]
 table(cell_types)
 rownames(full_matrix) <- cell_names <- make.names(cell_names, allow_ = F)
 colnames(full_matrix) <- gene_names
 
+tissue <- lfile[["col_attrs/tissue"]][]
+cell_call <- lfile[["col_attrs/cell_call"]][]
 @
+
+# V1: decont without removing 59 contaminated genes
 
 <<>>=
 mouse_human_decont <- decontX(x = as.matrix(t(full_matrix)), z = cell_types)
-length(mouse_human_decont$contamination)
+# length(mouse_human_decont$contamination)
+# decont_mat_after_v1 <- mouse_human_decont$decontXcounts
+# write.csv(as.matrix(decont_mat_after_v1), file = "~/Documents/projects/spatial-genomics/decontam/decont_mat/decont_mat_after_v1.csv")
 
 mouse_human_decont_df <- data.frame(cell_iden = cell_names,
-                                    cell_type = cell_types, 
+                                    cell_type = cell_types,
                                     count = mouse_human_decont$contamination)
-write.csv(mouse_human_decont_df, file = "~/Documents/Github/spatial-genomics/data/mouse_human-before.csv")
+# write.csv(mouse_human_decont_df, file = "~/Documents/Github/spatial-genomics/data/mouse_human-before-v1.csv")
 
-ggplot(mouse_human_decont_df, aes(x = cell_type, y = count)) +
-  geom_violin(colour = "red") + 
-  geom_jitter(shape = 16, position=position_jitter(0.2), size = 0.3, alpha = 0.3) +
+percent <- function(x, digits = 2, format = "f", ...) {
+  paste0(formatC(100 * x, format = format, digits = digits, ...), "%")
+}
+
+median <- mouse_human_decont_df %>% group_by(cell_type) %>%
+  summarise(median = median(count, na.rm = T),
+            percent = percent(median(count, na.rm = T)))
+
+mouse_human_decont_df %>% filter(cell_types != "Hek293t") %>%
+ggplot(aes(x = cell_type, y = count)) +
+  geom_jitter(shape = 16, position=position_jitter(0.2), size = 0.7, alpha = 0.8, color = "#dc2f02") +
+  geom_violin(colour = "black", alpha = 0.5, 
+              trim = T, scale = "width") + 
+  geom_text(data = median[median$cell_type != "Hek293t", ], aes(x = cell_type, y = 1.1, label = percent)) +
   theme_bw() +
   ylab("Estimated contamination fraction in each cell") +
-  xlab("Cell type")
-
-ggsave("~/Documents/Github/spatial-genomics/fig/contamination/mouse_human-before.png")
-
-mouse_human_decont_df %>% group_by(cell_type) %>%
-  summarise(median = median(count, na.rm = T))
-
-# rm(mouse_human_decont)
+  xlab("Cell type") +
+  scale_y_continuous(limits = c(0, 1.1), breaks = c(0, 0.25, 0.5, 0.75, 1))
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/final/contam_violin_v1.png")
 @
 
-<<remove-59-contaminated-genes>>=
+# V2: decont after removing 59 contaminated genes
+
+## how the 59 genes were picked out
+
+<<>>=
 hek293t_contam_result <- read.csv("~/Documents/projects/spatial-genomics/data/hek293t_contam_result.csv", row.names = 1)
+
+ggplot(hek293t_contam_result[1:5000, ], 
+       aes(x = 1:5000, y = log(counts + 1))) +
+  geom_point(size = 1) +
+  theme_bw() +
+  xlab("Gene index") +
+  ylab("log (Counts + 1) of mm10 transcripts in HEK293T cells") +
+  geom_hline(yintercept = 6, color = "red", linetype = "dotted")
+ggsave("~/Documents/GitHub/spatial-genomics/fig/contamination/final/mouse_counts_in_hek293t.png")
+@
+
+
+<<remove-59-contaminated-genes>>=
 contam_genes <- hek293t_contam_result[hek293t_contam_result$contam == T, "gene_name"]
 
 dim(full_matrix) # 10280 cells by 55346 genes
 full_matrix_update <- full_matrix[, ! colnames(full_matrix) %in% contam_genes]
 nonzero_cells <- which(rowSums(full_matrix_update) != 0) # 4 cells with zero counts
 # sum(rownames(toc_x) == toc_obs$cell_iden)
-full_matrix_new <- full_matrix_update[nonzero_cells, ] # 10280 cells by 55287 genes
+full_matrix_new <- full_matrix_update[nonzero_cells, ] # 10280 cells by 55287 genes (removed 59 genes)
 dim(full_matrix_new)
 cell_types_new <- cell_types[nonzero_cells]
 cell_names_new <- cell_names[nonzero_cells]
 
-# rm(full_matrix_update, nonzero_cells, full_matrix, gene_names, cell_names)
+rm(full_matrix_update, full_matrix)
 mouse_human_decont_new <- decontX(x = as.matrix(t(full_matrix_new)), z = cell_types_new)
+decont_mat_after_v2 <- mouse_human_decont_new$decontXcounts
+write.csv(as.matrix(decont_mat_after_v2), file = "~/Documents/projects/spatial-genomics/decontam/decont_mat/decont_mat_after_v2.csv")
+
+dim(decont_mat_after_v2) # 55287 genes by 10280 cells
 
 mouse_human_decont_new_df <- data.frame(cell_iden = cell_names_new,
                                         cell_type = cell_types_new, 
                                         count = mouse_human_decont_new$contamination)
-write.csv(mouse_human_decont_new_df, file = "~/Documents/Github/spatial-genomics/data/mouse_human-after.csv")
-
-ggplot(mouse_human_decont_new_df, aes(x = cell_type, y = count)) +
-  geom_violin(colour = "blue") + 
-  geom_jitter(shape = 16, position=position_jitter(0.2), size = 0.3, alpha = 0.3) +
-  theme_bw() +
-  ylab("Estimated contamination fraction in each cell") +
-  xlab("Cell type")
-ggsave("~/Documents/Github/spatial-genomics/fig/contamination/mouse_human-after.png")
-
-mouse_human_decont_new_df %>% group_by(cell_type) %>%
-  summarise(median = median(count, na.rm = T))
-
-mouse_human_decont_merge <- left_join(mouse_human_decont_df, 
-                                      mouse_human_decont_new_df[, c("cell_iden", "count")], 
-                                      by = "cell_iden")
-
-mouse_human_decont_merge_long <- reshape(mouse_human_decont_merge, 
-                                 direction = "long",
-                                 varying = c("count.x", "count.y"), 
-                                 idvar = "cell_iden")
-
-
-ggplot(mouse_human_decont_merge_long, aes(x = count)) +
-   geom_line(aes(colour=time), stat = "density", alpha=0.5) +  
-    facet_wrap(~ cell_type, scales = "free") +
-    scale_color_manual(name = "Remove contaminated genes", 
-                         breaks = c("x", "y"),
-                         label = c("before", "after"),
-                         values = c("red", "blue")) +
-    xlab("estimated contamination rate per cell") +
-    theme_bw() +
-    theme(legend.position = "bottom")
-  
-ggsave("~/Documents/Github/spatial-genomics/fig/contamination/mouse_human-compare.png")
+# write.csv(mouse_human_decont_new_df, file = "~/Documents/Github/spatial-genomics/data/mouse_human-after-v2.csv")
 @
 
 <<barnyard-plot>>=
+# v1: decontaminated count matrix based on the raw counts
+# decont_mat_after <- decont_mat_after_v1
+
+# v2: decontaminated count matrix after removing 59 genes
+# decont_mat_after_v2 <- mouse_human_decont_new$decontXcounts
 decont_mat_after <- mouse_human_decont_new$decontXcounts
-write.csv(decont_mat_after, file = "~/Documents/Github/spatial-genomics/data/decont_data_mat_after.csv")
+
+# v3: remove 59 genes only
+# decont_mat_after <- t(full_matrix_new)
 
 dim(decont_mat_after) # 55287 genes by 10280 cells
-mouse_genes_idx_after <- grep("mm10", rownames(decont_mat_after))
-human_genes_idx_after <- grep("hg19", rownames(decont_mat_after))
-mouse_sum_after <- Matrix::colSums(decont_mat_after[mouse_genes_idx_after,])
-human_sum_after <- Matrix::colSums(decont_mat_after[human_genes_idx_after, ])
-sum_after <- data.frame("cell_iden" = colnames(decont_mat_after),
-                   "mouse" = mouse_sum_after,
-                   "human" = human_sum_after)
-write.csv(sum_after, file = "~/Documents/Github/spatial-genomics/data/mixture-after.csv")
 @
 
+Preprocess the decontaminated data following Derek's protocol. 
 
 <<>>=
-decont_mat_before <- full_matrix
+mito_gene <- grep("mm10_mt-", rownames(decont_mat_after))
+perc_mito <- rep(NA, ncol(decont_mat_after))
+for(i in 1:ncol(decont_mat_after)){
+ perc_mito[i] <- sum(decont_mat_after[mito_gene, i]) / sum(decont_mat_after[, i]) 
+}
+
+sum(Matrix::colSums(decont_mat_after) <= 500) # 1523
+decont_mat_after_p1 <- decont_mat_after[, Matrix::colSums(decont_mat_after) > 500]
+perc_mito_p1 <- perc_mito[Matrix::colSums(decont_mat_after) > 500]
+dim(decont_mat_after_p1) # 55287 genes by 8757 cells
+
+sum(Matrix::colSums(decont_mat_after_p1 != 0)  < 100) # 5
+decont_mat_after_p2 <- decont_mat_after_p1[, Matrix::colSums(decont_mat_after_p1 != 0)  >= 100]
+perc_mito_p2 <- perc_mito_p1[Matrix::colSums(decont_mat_after_p1 != 0)  >= 100]
+dim(decont_mat_after_p2) # 55287 genes by 8752 cells
+
+sum(Matrix::rowSums(decont_mat_after_p2 != 0)  < 1) # 2873
+decont_mat_after_p3 <- decont_mat_after_p2[Matrix::rowSums(decont_mat_after_p2 != 0)  >= 1, ]
+dim(decont_mat_after_p3) # 51414 genes by 8752 cells
+
+sum(Matrix::colSums(decont_mat_after) >= 10000)
+
+sum(perc_mito_p2 < 0.01) # 8746
+decont_mat_after_p4 <- decont_mat_after_p3[, perc_mito_p2 < 0.01]
+dim(decont_mat_after_p4) # 51414 genes by 8746 cells
+@
+
+<<>>=
+mouse_genes_idx_after <- grep("mm10", rownames(decont_mat_after_p4))
+human_genes_idx_after <- grep("hg19", rownames(decont_mat_after_p4))
+mouse_sum_after <- Matrix::colSums(decont_mat_after_p4[mouse_genes_idx_after,])
+human_sum_after <- Matrix::colSums(decont_mat_after_p4[human_genes_idx_after, ])
+sum_after <- data.frame("cell_iden" = colnames(decont_mat_after_p4),
+                   "mouse" = mouse_sum_after,
+                   "human" = human_sum_after)
+
+# write.csv(sum_after, file = "~/Documents/Github/spatial-genomics/data/results/mixture-after-v2.csv")
+
+sum_after <- sum_after %>%
+  mutate(ratio = log10(mouse / human)) %>%
+  mutate(new_cell_call = case_when(ratio > 0.66 ~ "M",
+                                   ratio < -0.66 ~ "H", 
+                                   TRUE ~ "C"))
+
+# mixed species rate
+table(sum_after$new_cell_call)/nrow(sum_after)
+@
+
+<<>>=
+# decont_mat_before <- full_matrix
+decont_mat_before <- lfile[["matrix"]][, ]
+rownames(decont_mat_before) <- cell_names <- make.names(cell_names, allow_ = F)
+colnames(decont_mat_before) <- gene_names
 dim(decont_mat_before) # 10280 cells by 55346 genes
 mouse_genes_idx_before <- grep("mm10", colnames(decont_mat_before))
 human_genes_idx_before <- grep("hg19", colnames(decont_mat_before))
@@ -140,47 +182,297 @@ human_sum_before <- Matrix::rowSums(decont_mat_before[,human_genes_idx_before])
 sum_before <- data.frame("cell_iden" = rownames(decont_mat_before),
                    "mouse" = mouse_sum_before,
                    "human" = human_sum_before)
-write.csv(sum_before, file = "~/Documents/Github/spatial-genomics/data/mixture-before.csv")
-@
+write.csv(sum_before, file = "~/Documents/Github/spatial-genomics/data/results/mixture-before-v2.csv")
 
-<<>>=
-# fake / empty legend
-legend_data <- data.frame(null_x = rep(0, 4), 
-                          null_y = rep(0, 4),
-                          legend = c("magenta", "darkgreen",
-                                     "orange", "gray"))
+sum_before <- sum_before %>%
+  mutate(ratio = log10(mouse / human)) %>%
+  mutate(new_cell_call = case_when(ratio > 0.66 ~ "M",
+                                   ratio < -0.66 ~ "H",
+                                   TRUE ~ "C"))
 
-ggplot(legend_data, aes(x = null_x, y = null_y, color = legend)) +
-  geom_point(alpha = 0) + 
-    geom_point(data = sum_before,
-               aes(x = human, y = mouse),# shape = "Original"
-               color = ifelse(cell_types == "Hek293t",
-                              "magenta", "darkgreen"),
-               size = 0.1,
-               alpha = 0.5) +
-  geom_point(data = sum_after,
-             aes(x = human, y = mouse),# shape = "Decontaminated"
-             color = ifelse(cell_types_new == "Hek293t",
-                            "orange", "gray"),
-             size = 0.1,
-             alpha = 0.3) +
-  scale_color_manual(breaks = c("magenta", "darkgreen",
-                                     "orange", "gray"),
-                     values = c("magenta", "darkgreen",
-                                     "orange", "gray"),
+sum(rowSums(decont_mat_before) <= 500) # 12
+sum(rowSums(decont_mat_before != 0) < 100) # 0
+sum(rowSums(decont_mat_before != 0) < 1) # 0
+sum(colSums(decont_mat_before) >= 10000) # 73
+
+Barnyarn_layers <- function()
+  list(scale_color_manual(breaks = c("#a0c4ff", "#faa307",
+                                "blue", "#ef233c"),
+                     values = c("#a0c4ff", "#faa307",
+                                "blue", "#ef233c"),
                      labels = c("Human: original counts",
                                "Mouse: original counts",
                                "Human: decontaminated counts",
                                "Mouse: decontaminated counts"),
                      guide = guide_legend(nrow = 2, title = "Cell Type",
+                                         override.aes = list(alpha = 1))),
+  ylab("hg19 counts"),
+  xlab("mm10 counts"),
+  geom_point(alpha = 0),
+  theme_bw())
+  
+legend_data <- data.frame(null_x = rep(0, 4), 
+                          null_y = rep(0, 4),
+                          legend = c("#a0c4ff", "#faa307",
+                                     "blue", "#ef233c"))
+# dc2f02 - red, a0c4ff - light blue, faa307 - orange
+
+# ggplot(legend_data, aes(x = null_x, y = null_y, color = legend)) +
+#     geom_point(data = sum_before,
+#                aes(x = mouse, y = human),
+#                color = ifelse(cell_types == "Hek293t",
+#                               "#a0c4ff", "#faa307"),
+#                size = 0.3,
+#                alpha = 0.5) +
+#   geom_point(data = sum_after,
+#              aes(x = mouse, y = human),
+#              color = ifelse(cell_types == "Hek293t",
+#              # color = ifelse(cell_types_new == "Hek293t",
+#                             "blue", "#ef233c"),
+#              size = 0.3,
+#              alpha = 0.3) +
+#   Barnyarn_layers() +
+#   theme(legend.position = "bottom") 
+# ggsave("~/Documents/Github/spatial-genomics/fig/contamination/mixture-v2-update.png")
+@
+
+<<supp-barnyard-x>>=
+# ggplot(legend_data, aes(x = null_x, y = null_y, color = legend)) +
+#     geom_point(data = sum_before, aes(x = mouse, y = human),
+#                color = ifelse(cell_types == "Hek293t", "#a0c4ff", "#faa307"),
+#                size = 2, alpha = 0.5) +
+#   geom_point(data = sum_after, aes(x = mouse, y = human),
+#              color = ifelse(cell_types == "Hek293t",
+#              # color = ifelse(cell_types_new == "Hek293t",
+#                             "blue", "#ef233c"),
+#              size = 2, alpha = 0.3) +
+#   Barnyarn_layers() +
+#   theme(legend.position = "none",
+#         axis.title = element_blank(),
+#         text = element_text(size=20)) +
+#   xlim(2500, 8000) +
+#   ylim(0, 1000)
+# ggsave("~/Documents/Github/spatial-genomics/fig/contamination/barnyard-liver-v2-x.png")
+@
+
+<<supp-barnyard-y>>=
+# ggplot(legend_data, aes(x = null_x, y = null_y, color = legend)) +
+#     geom_point(data = sum_before, aes(x = mouse, y = human),
+#                color = ifelse(cell_types == "Hek293t", "#a0c4ff", "#faa307"),
+#                size = 2, alpha = 0.5) +
+#   geom_point(data = sum_after, aes(x = mouse, y = human),
+#              color = ifelse(cell_types == "Hek293t",
+#              # color = ifelse(cell_types_new == "Hek293t",
+#                             "blue", "#ef233c"),
+#              size = 2, alpha = 0.3) +
+#   Barnyarn_layers() +
+#   theme(legend.position = "none",
+#         axis.title = element_blank(),
+#         text = element_text(size=20)) +
+#   xlim(0, 1000) +
+#   ylim(4000, 7500)
+# ggsave("~/Documents/Github/spatial-genomics/fig/contamination/barnyard-liver-v2-y.png")
+@
+
+<<barnyard-side-by-side>>=
+# sum(sum_before$cell_iden == cell_names)
+# sum(sum_after$cell_iden == cell_names)
+sum_before$cell_types <- cell_types
+sum_after$cell_types <- cell_types[which(sum_after$cell_iden %in% cell_names)]
+
+sum_before$tissue <- tissue
+sum_after$tissue <- tissue[which(sum_after$cell_iden %in% cell_names)]
+
+sum_before$decont <- rep(as.factor("Original counts"), nrow(sum_before))
+sum_after$decont <- rep(as.factor("Decontaminated counts"), nrow(sum_after))
+sum_all <- rbind(sum_before, sum_after)
+
+ggplot(data = sum_all, aes(x = mouse, y = human)) +
+  geom_point(aes(color = new_cell_call), size = 0.7, alpha = 0.5) +
+  facet_wrap(~ decont) +
+  xlab("mm10 counts") +
+  ylab("hg19 counts") +
+  scale_color_manual(breaks = c("H", "M", "C"),
+                     values = c("blue", "#ef233c", "gray"),
+                     labels = c("human", "mouse", "collision"),
+                     guide = guide_legend(nrow = 1, title = "Cell label",
                                          override.aes = list(alpha = 1))) +
-  xlab("hg19 counts") +
-  ylab("mm10 counts") +
   theme_bw() +
   theme(legend.position = "bottom")
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/final/barnyard_side_by_side_new_cell_call.png")
+@
 
-ggsave("~/Documents/Github/spatial-genomics/fig/contamination/mixture.png")
+calculate mixed species rate 
+
+<<>>=
+table(sum_before$new_cell_call)/nrow(sum_before)
+table(sum_after$new_cell_call)/nrow(sum_after)
+@
+
+barnyard by spatial region
+
+<<>>=
+# sum_all %>% filter(cell_types == "Hepatocyte") %>%
+ggplot(data = sum_all, aes(x = mouse, y = human)) +
+  geom_point(aes(color = tissue), size = 0.7, alpha = 0.5) +
+  facet_wrap(~ decont) +
+  xlab("mm10 counts") +
+  ylab("hg19 counts") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+# ggsave("~/Documents/Github/spatial-genomics/fig/contamination/human_mouse/tissue_barnyard_side_by_side.png")
+@
+
+<<performance-hek293t>>=
+dim(full_matrix) # 10280 cells, 55346 genes
+# proportion of mouse transcripts in hek293t human cells
+hek293t_mat_prop <- Matrix::rowSums(full_matrix[cell_types == "Hek293t", 
+                           grep("mm10", colnames(full_matrix))]) / Matrix::rowSums(full_matrix[cell_types == "Hek293t", ])
+
+# sum(mouse_human_decont$estimates$all_cells$contamination == mouse_human_decont$contamination) # 10280
+all_cont_rate <- mouse_human_decont$estimates$all_cells$contamination
+# sum(names(all_cont_rate) == rownames(full_matrix)) # 10280
+hek293t_est_cont <- all_cont_rate[cell_types == "Hek293t"]
+
+hek293t_df <- data.frame("prop" = hek293t_mat_prop, "est_cont" = hek293t_est_cont)
+
+cor(hek293t_df$prop, hek293t_df$est_cont)
+
+# cosine similarity
+sum(hek293t_df$prop * hek293t_df$est_cont)/sqrt(sum(hek293t_df$prop ^ 2)*sum(hek293t_df$est_cont ^2))
+
+ggplot(hek293t_df, aes(x = hek293t_mat_prop, y = hek293t_est_cont)) +
+  geom_point(size = 0.7, color = "blue") +
+  theme_bw() +
+  ggtitle(TeX('Hek293t cells: r = 0.9866, $S_C$ = 0.9827')) +
+  xlab("Proportion of mm10 transcripts") +
+  ylab("Estimated contamination")
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/liver_hek293t.png")
+@
+
+<<performance-3t3>>=
+# proportion of human transcripts in all the mouse cells
+mouse_mat_prop <- Matrix::rowSums(full_matrix[cell_types != "Hek293t", 
+                           grep("hg19", colnames(full_matrix))]) / Matrix::rowSums(full_matrix[cell_types != "Hek293t", ])
+
+mouse_est_cont <- all_cont_rate[cell_types != "Hek293t"]
+
+
+mouse_df <- data.frame("prop" = mouse_mat_prop, "est_cont" = mouse_est_cont)
+
+cor(mouse_df$prop, mouse_df$est_cont)
+
+# cosine similarity
+sum(mouse_df$prop * mouse_df$est_cont)/sqrt(sum(mouse_df$prop ^ 2)*sum(mouse_df$est_cont ^2))
+
+ggplot(mouse_df, aes(x = mouse_mat_prop, y = mouse_est_cont)) +
+  geom_point(size = 0.7, color = "#dc2f02") +
+  theme_bw() +
+  ggtitle(TeX('Non-specific mouse cells: r = 0.8133, $S_C$ = 0.8179')) +
+  xlab("Proportion of hg19 transcripts") +
+  ylab("Estimated contamination")
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/liver_mouse.png")
+
+@
+
+<<performance-mc38-hepato>>=
+# proportion of human transcripts in 3T3 mouse cells
+mouse_mat_prop <- Matrix::rowSums(full_matrix[cell_types == "Hepatocyte", 
+                           grep("hg19", colnames(full_matrix))]) / Matrix::rowSums(full_matrix[cell_types == "Hepatocyte", ])
+
+mouse_est_cont <- all_cont_rate[cell_types == "Hepatocyte"]
+
+
+mouse_df <- data.frame("prop" = mouse_mat_prop, "est_cont" = mouse_est_cont)
+
+cor(mouse_df$prop, mouse_df$est_cont)
+
+# cosine similarity
+sum(mouse_df$prop * mouse_df$est_cont)/sqrt(sum(mouse_df$prop ^ 2)*sum(mouse_df$est_cont ^2))
+
+ggplot(mouse_df, aes(x = mouse_mat_prop, y = mouse_est_cont)) +
+  geom_point(size = 0.7, color = "#dc2f02") +
+  theme_bw() +
+  ggtitle(TeX('Hepatocyte: r = 0.821, $S_C$ = 0.832')) +
+  # ggtitle(TeX('MC38: r = 0.9215, $S_C$ = 0.8903')) +
+  xlab("Proportion of hg19 transcripts") +
+  ylab("Estimated contamination")
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/liver_mc38.png")
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/liver_hepato.png")
+
+@
+
+avg of mm10 gene expression in mouse cells 
+against
+proportion of mouse-aligned transcripts in Hek293t cells
+
+<<>>=
+# for each mouse gene: avg expression across all the mouse cells versus the proportion of counts for this gene among all the mouse genes in human cells
+dim(full_matrix) # 10280 cells by 55346 genes
+mouse_mat <- full_matrix[, grep("mm10", colnames(full_matrix))]
+human_mat <- full_matrix[, grep("hg19", colnames(full_matrix))]
+
+# mouse_mat <- mouse_mat_raw[, ! colnames(mouse_mat_raw) %in% contam_genes]
+# results do not differ much
+prop_mouse_gene <- Matrix::colSums(mouse_mat[cell_types == "Hek293t", ]) / sum(mouse_mat[cell_types == "Hek293t", ])
+range(prop_mouse_gene)
+which(prop_mouse_gene > 0.01)
+# mm10_Rnf152  mm10_Cmss1 mm10_Gm42418  mm10_Foxp4   mm10_A530064D06Rik  mm10_Snx24 
+# 796           22168       23065       23187         23191                23972 
+
+
+mouse_cpmNor <- celda::normalizeCounts(counts = t(mouse_mat), "cpm") 
+# dim(mouse_cpmNor) # 24976 genes by 10280 cells
+mouse_cpmNor_ccType <- mouse_cpmNor[, cell_types != "Hek293t"] 
+mouse_average_exp_cpm <- rowSums( mouse_cpmNor_ccType ) / ncol( mouse_cpmNor_ccType ) # y
+mouse_gene_df <- data.frame("gene_names" = names(prop_mouse_gene),
+                            "prop" = prop_mouse_gene,
+                            "avg" = mouse_average_exp_cpm)
+# write.csv(mouse_gene_df, file = "~/Documents/Github/spatial-genomics/data/results/mouse_gene_prop_avg.csv")
+
+hek293t_contam_result <- read.csv("~/Documents/projects/spatial-genomics/data/hek293t_contam_result.csv", row.names = 1)
+contam_genes <- hek293t_contam_result[hek293t_contam_result$contam == T, "gene_name"]
+
+
+mouse_gene_df %>% 
+  filter(! gene_names %in% contam_genes) %>%
+  # filter(prop_mouse_gene <= 0.01, mouse_average_exp_cpm < 5000) %>%
+  ggplot(aes(x = prop, y = avg)) +
+  geom_point() +
+  ggtitle("mm10") +
+  xlab("Proportion of mm10 transcripts in Hek293t cells") +
+  ylab("Average of mm10 gene expression in mouse cells") +
+  theme_bw()
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/mouse_gene_prop_avg_rm59.png")
+
+mouse_gene_df %>%
+   filter(prop_mouse_gene < 0.005, mouse_average_exp_cpm  > 2000)
 @
 
 
+<<>>=
+prop_human_gene <- Matrix::colSums(human_mat[cell_types != "Hek293t", ]) / sum(human_mat[cell_types != "Hek293t", ])
+range(prop_human_gene)
+which(prop_human_gene > 0.01)
+#  hg19_RP4-594L9.2 hg19_RP11-323I15.5 
+#             17313              21927 
+
+human_cpmNor <- celda::normalizeCounts(counts = t(human_mat), "cpm") 
+# dim(human_cpmNor) # 30370 genes by 10280 cells
+human_cpmNor_ccType <- human_cpmNor[, cell_types == "Hek293t"] 
+human_average_exp_cpm <- rowSums( human_cpmNor_ccType ) / ncol( human_cpmNor_ccType ) # y
+human_gene_df <- data.frame("gene_names" = names(prop_human_gene),
+                            "prop" = prop_human_gene,
+                            "avg" = human_average_exp_cpm)
+write.csv(human_gene_df, file = "~/Documents/Github/spatial-genomics/data/results/human_gene_prop_avg.csv")
+human_gene_df %>% 
+  filter(prop_human_gene <= 0.01) %>%
+  ggplot(aes(x = prop, y = avg)) +
+  geom_point() +
+  ggtitle("hg19") +
+  xlab("Proportion of hg19 transcripts in mouse cells") +
+  ylab("Average of hg19 gene expression in human cells") +
+  theme_bw()
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/human_gene_prop_avg.png")
+@
 \end{document}
