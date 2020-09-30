@@ -268,7 +268,7 @@ ggplot(diff_features_within_hepato) +
   xlab("log2FC") + 
   ylab("-log10(corrected p-value)") +
   theme_bw()
-ggsave("~/Documents/Github/spatial-genomics/fig/contamination/decont_violin.png")
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/decont_volcano.png")
 @
 
 \end{document}
