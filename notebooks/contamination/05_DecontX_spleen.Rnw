@@ -1,0 +1,248 @@
+\documentclass{article}
+
+\begin{document}
+
+<<packages>>=
+library("reticulate")
+use_python("/Applications/anaconda3/bin/python3", required = T)
+sc <- import("scanpy")
+
+library(celda) # DecontX
+library(tidyverse)
+# library(loomR)
+# library(Seurat)
+@
+
+<<data>>=
+setwd("~/Documents/Github/spatial-genomics")
+adata <- sc$read_h5ad("./data/spleen.concat.raw_counts.h5ad")
+adata
+# AnnData object with n_obs × n_vars = 7505 × 52025 
+#     obs: 'batch', 'percent_mito_mouse', 'percent_mito_human', 'n_counts', 'n_genes', 'mouse_counts', 'human_counts', 'ratio', 'cell_call', 'leiden', 'CellType'
+#     var: 'n_cells', 'log_cells'
+
+dim(adata$X) # 7505 cells and 52025 genes
+mat <- adata$X
+cell_names <- adata$obs_names$to_list()
+rownames(mat) <- cell_names <- make.names(cell_names, allow_ = F)
+colnames(mat) <- gene_names <- adata$var_names$to_list()
+batches <- adata$obs$batch
+cell_types <- adata$obs$CellType
+range(mat) # 0 939
+table(cell_types)
+table(batches)
+@
+
+<<>>=
+spleen_decont_batch <- decontX(x = t(as.matrix(mat)), 
+                         z = cell_types, 
+                         batch = batches)
+spleen_decont <- spleen_decont_batch
+# spleen_decont_wo_batch <- decontX(x = t(as.matrix(mat)), 
+#                                   z = cell_types)
+# spleen_decont <- spleen_decont_wo_batch
+
+spleen_decont_df <- data.frame(cell_iden = cell_names,
+                               cell_type = cell_types,
+                               count = spleen_decont$contamination)
+
+percent <- function(x, digits = 2, format = "f", ...) {
+  paste0(formatC(100 * x, format = format, digits = digits, ...), "%")
+}
+
+median <- spleen_decont_df %>% group_by(cell_type) %>%
+  summarise(median = median(count, na.rm = T),
+            percent = percent(median(count, na.rm = T)))
+
+spleen_decont_df %>% 
+ggplot(aes(x = cell_type, y = count)) +
+  geom_jitter(aes(color = cell_type == "Hek293t"), shape = 16, position=position_jitter(0.2), size = 0.7, alpha = 0.8) +
+  geom_violin(colour = "black", alpha = 0.5, 
+              trim = T, scale = "width") + 
+  geom_text(data = median, aes(x = cell_type, y = 1.1, label = percent)) +
+  ylab("Estimated contamination fraction in each cell") +
+  xlab("Cell type") +
+  scale_y_continuous(limits = c(0, 1.1), breaks = c(0, 0.25, 0.5, 0.75, 1)) +
+  scale_color_manual(breaks = c("TRUE", "FALSE"),
+                     values = c("blue", "#dc2f02")) +
+  theme_bw() +
+  theme(legend.position = "none")
+#ggsave("~/Documents/Github/spatial-genomics/fig/contamination/final/spleen_contam_violin_wo_batch.png")
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/final/spleen_contam_violin.png")
+@
+
+contamination of mm10 genes in Hek293t cells
+
+<<>>=
+mouse_mat <- mat[, grep("mm10", colnames(mat))]
+dim(mouse_mat) # 7505 cells by 22810 genes
+mouse_counts_hek293t <- Matrix::colSums(mouse_mat[cell_types == "Hek293t", ])
+hek293t_contam_spleen <- data.frame("gene_name" = gene_names[grep("mm10", gene_names)],
+                                    "counts" = mouse_counts_hek293t)
+hek293t_contam_spleen <- hek293t_contam_spleen %>% arrange(desc(counts)) %>%
+  mutate("log_count" = log(counts + 1)) %>%
+  mutate("contam" = log_count > 6)
+write.csv(hek293t_contam_spleen, file = "~/Documents/projects/spatial-genomics/decontam/spleen/hek293t_contam_spleen.csv")
+  
+ggplot(hek293t_contam_spleen[1:5000,], 
+       aes(x = 1:5000, y = log(counts + 1))) +
+  geom_point(size = 1) +
+  theme_bw() +
+  xlab("Gene index") +
+  ylab("log (Counts + 1) of mm10 transcripts in HEK293T cells") +
+  geom_hline(yintercept = 6, color = "red", linetype = "dotted")
+ggsave("~/Documents/GitHub/spatial-genomics/fig/contamination/final/mouse_counts_in_hek293t_spleen.png")
+@
+
+<<remove-18-contaminated-genes>>=
+contam_genes <- hek293t_contam_spleen[hek293t_contam_spleen$contam == T, "gene_name"]
+
+dim(mat) # 7505 cells by 52025 genes
+mat_new <- mat[, ! colnames(mat) %in% contam_genes]
+# which(Matrix::rowSums(mat_update) == 0) # 0 cells with zero counts
+
+rm(full_matrix_update, full_matrix)
+spleen_decont_new <- decontX(x = t(as.matrix(mat_new)), 
+                             z = cell_types, batch = batches)
+decont_mat_after_v2 <- spleen_decont_new$decontXcounts
+write.csv(as.matrix(decont_mat_after_v2), file = "~/Documents/projects/spatial-genomics/decontam/spleen/spleen_decont_mat_after_v2.csv")
+
+dim(decont_mat_after_v2) # 55007 genes by 7505 cells (18 genes were removed)
+
+spleen_decont_new_df <- data.frame(cell_iden = cell_names,
+                                        cell_type = cell_types, 
+                                        count = spleen_decont_new$contamination)
+# write.csv(spleen_decont_new_df, file = "~/Documents/Github/spatial-genomics/data/spleen-after-v2.csv")
+@
+
+barnyard plot
+
+<<>>=
+decont_mat_after <- spleen_decont_new$decontXcounts
+dim(decont_mat_after) # 52007 genes by 7505 cells
+@
+
+Preprocess the decontaminated data following Derek's protocol. 
+
+<<>>=
+mito_gene <- grep("mm10_mt-", rownames(decont_mat_after))
+perc_mito <- rep(NA, ncol(decont_mat_after))
+for(i in 1:ncol(decont_mat_after)){
+ perc_mito[i] <- sum(decont_mat_after[mito_gene, i]) / sum(decont_mat_after[, i]) 
+}
+
+sum(Matrix::colSums(decont_mat_after) <= 500) # 295
+decont_mat_after_p1 <- decont_mat_after[, Matrix::colSums(decont_mat_after) > 500]
+perc_mito_p1 <- perc_mito[Matrix::colSums(decont_mat_after) > 500]
+dim(decont_mat_after_p1) # 52007 genes by 7210 cells
+
+sum(Matrix::colSums(decont_mat_after_p1 != 0)  < 100) # 0
+
+sum(Matrix::rowSums(decont_mat_after_p1 != 0)  < 1) # 4077
+decont_mat_after_p2 <- decont_mat_after_p1[Matrix::rowSums(decont_mat_after_p1 != 0)  >= 1, ]
+dim(decont_mat_after_p2) # 47930 genes by 7210 cells
+
+sum(Matrix::colSums(decont_mat_after) >= 10000) # 0
+sum(perc_mito_p1 < 0.01) # 7210
+@
+
+<<>>=
+mouse_genes_idx_after <- grep("mm10", rownames(decont_mat_after_p2))
+human_genes_idx_after <- grep("GRCh38", rownames(decont_mat_after_p2))
+mouse_sum_after <- Matrix::colSums(decont_mat_after_p2[mouse_genes_idx_after,])
+human_sum_after <- Matrix::colSums(decont_mat_after_p2[human_genes_idx_after, ])
+sum_after <- data.frame("cell_iden" = colnames(decont_mat_after_p2),
+                   "mouse" = mouse_sum_after,
+                   "human" = human_sum_after)
+
+sum_after <- sum_after %>%
+  mutate(ratio = log10(mouse / human)) %>%
+  mutate(new_cell_call = case_when(ratio > 0.66 ~ "M",
+                                   ratio < -0.66 ~ "H", 
+                                   TRUE ~ "C"))
+
+# mixed species rate
+table(sum_after$new_cell_call)/nrow(sum_after)
+@
+
+<<>>=
+# decont_mat_before
+rownames(mat) <- cell_names <- make.names(cell_names, allow_ = F)
+colnames(mat) <- gene_names
+dim(mat) # 10280 cells by 55346 genes
+mouse_genes_idx_before <- grep("mm10", colnames(mat))
+human_genes_idx_before <- grep("GRCh38", colnames(mat))
+mouse_sum_before <- Matrix::rowSums(mat[,mouse_genes_idx_before])
+human_sum_before <- Matrix::rowSums(mat[,human_genes_idx_before])
+sum_before <- data.frame("cell_iden" = rownames(mat),
+                   "mouse" = mouse_sum_before,
+                   "human" = human_sum_before)
+
+sum_before <- sum_before %>%
+  mutate(ratio = log10(mouse / human)) %>%
+  mutate(new_cell_call = case_when(ratio > 0.66 ~ "M",
+                                   ratio < -0.66 ~ "H",
+                                   TRUE ~ "C"))
+
+sum(Matrix::rowSums(mat) <= 500) # 12
+sum(Matrix::rowSums(mat != 0) < 100) # 0
+sum(Matrix::rowSums(mat != 0) < 1) # 0
+sum(Matrix::colSums(mat) >= 10000) # 40
+
+Barnyarn_layers <- function()
+  list(scale_color_manual(breaks = c("#a0c4ff", "#faa307",
+                                "blue", "#ef233c"),
+                     values = c("#a0c4ff", "#faa307",
+                                "blue", "#ef233c"),
+                     labels = c("Human: original counts",
+                               "Mouse: original counts",
+                               "Human: decontaminated counts",
+                               "Mouse: decontaminated counts"),
+                     guide = guide_legend(nrow = 2, title = "Cell Type",
+                                         override.aes = list(alpha = 1))),
+  ylab("GRCh38 counts"),
+  xlab("mm10 counts"),
+  geom_point(alpha = 0),
+  theme_bw())
+  
+legend_data <- data.frame(null_x = rep(0, 4), 
+                          null_y = rep(0, 4),
+                          legend = c("#a0c4ff", "#faa307",
+                                     "blue", "#ef233c"))
+@
+
+<<>>=
+sum_before$cell_types <- cell_types
+sum_after$cell_types <- cell_types[which(sum_after$cell_iden %in% cell_names)]
+
+sum_before$decont <- rep(as.factor("Original counts"), nrow(sum_before))
+sum_after$decont <- rep(as.factor("Decontaminated counts"), nrow(sum_after))
+sum_all <- rbind(sum_before, sum_after)
+
+ggplot(data = sum_all, aes(x = mouse, y = human)) +
+  geom_point(aes(color = new_cell_call), size = 0.7, alpha = 0.5) +
+  facet_wrap(~ decont) +
+  xlab("mm10 counts") +
+  ylab("hg19 counts") +
+  scale_color_manual(breaks = c("H", "M", "C"),
+                     values = c("blue", "#ef233c", "gray"),
+                     labels = c("human", "mouse", "collision"),
+                     guide = guide_legend(nrow = 1, title = "Cell label",
+                                         override.aes = list(alpha = 1))) +
+  theme_bw() +
+  theme(legend.position = "bottom")
+ggsave("~/Documents/Github/spatial-genomics/fig/contamination/spleen/spleen_barnyard_side_by_side.png")
+@
+
+calculate mixed species rate 
+
+<<>>=
+table(sum_before$new_cell_call)/nrow(sum_before)
+#          C          H          M 
+# 0.01385743 0.53391073 0.45223185 
+table(sum_after$new_cell_call)/nrow(sum_after)
+#          C          H          M 
+# 0.01385743 0.53391073 0.45223185 
+@
+
+\end{document}
