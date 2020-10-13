@@ -90,4 +90,5 @@ s_max <- extractFeatures(nmf_res_spleen, method = "max")
 s_kim <- extractFeatures(nmf_res_spleen)
 
 lapply(s_max, write, "./spleen_module_max.txt", append = TRUE, ncolumns=5000)
-# lapply(s_kim, write, "./spleen_module_kim.txt", append = TRUE, ncolumns=5000)
+lapply(s_max, cat, "\n", file = "./spleen_module_max_cat.txt", append = TRUE)
+# lapply(s_kim, write, "./spleen_module_kim.txt", append = TRUE, ncolumns=000)
