@@ -56,25 +56,25 @@ liver_tumor_mat_nn_sel <- liver_tumor_mat_nn[, colSums(liver_tumor_mat_nn) != 0]
 dim(liver_tumor_mat_nn_sel) #  2256 cells by 20787 genes
 
 # TEST CASE: 
-# sample_raw <- liver_tumor_mat_nn_sel[1:100, 1:200]
+# sample_raw <- liver_tumor_mat_nn_sel[1:1000, 1:2000]
 # sample <- sample_raw[rowSums(sample_raw) != 0, colSums(sample_raw) != 0]
 # dim(sample)
-# estim.r <- nmf(x = t(sample),
-#                rank = 2:5, nrun=11, seed=123456)
-# png(file = "./estim.png", width = 1024, height = 768)
-# plot(estim.r)
-# dev.off()
+# # estim.r <- nmf(x = t(sample),
+# #                rank = 2:5, nrun=11, seed=123456)
+# # png(file = "./estim.png", width = 1024, height = 768)
+# # plot(estim.r)
+# # dev.off()
 # fit1 <- estim.r$fit$`2`
 # s_max_fit1 <- extractFeatures(fit1, method = "max")
 # s_kim_fit1 <- extractFeatures(fit1)
-# lapply(s_max_fit1, write, "./liver_module_max_fit1.txt", append = TRUE)
-# lapply(s_kim_fit1, write, "./liver_module_kim_fit1.txt", append = TRUE)
+# lapply(s_max_fit1, write, "./liver_module_max_fit1.txt", append = TRUE, ncolumns=1000)
+# lapply(s_kim_fit1, write, "./liver_module_kim_fit1.txt", append = TRUE, ncolumns=1000)
 # fit2 <- nmf(x = t(sample), # feature by sample
 #             rank = 10, method = "nsNMF")
 # s_max_fit2 <- extractFeatures(fit2, method = "max")
 # s_kim_fit2 <- extractFeatures(fit2)
-# lapply(s_max_fit2, write, "./liver_module_max_fit2.txt", append = TRUE)
-# lapply(s_kim_fit2, write, "./liver_module_kim_fit2.txt", append = TRUE)
+# lapply(s_max_fit2, write, "./liver_module_max_fit2.txt", append = TRUE, ncolumns=1000)
+# lapply(s_kim_fit2, write, "./liver_module_kim_fit2.txt", append = TRUE, ncolumns=1000)
 
 nmf_res_liver <- nmf(x = t(liver_tumor_mat_nn_sel), # feature by sample
                     rank = 10, method = "nsNMF")
@@ -87,5 +87,6 @@ nmf_res_liver@fit
 s_max <- extractFeatures(nmf_res_liver, method = "max")
 s_kim <- extractFeatures(nmf_res_liver)
 
-lapply(s_max, write, "./liver_module_max.txt", append = TRUE)
-lapply(s_kim, write, "./liver_module_kim.txt", append = TRUE)
+lapply(s_max, write, "./liver_module_max.txt", append = TRUE, ncolumns=5000)
+lapply(s_max, cat, "\n", file = "./liver_module_max.txt", append = TRUE)
+# lapply(s_kim, write, "./liver_module_kim.txt", append = TRUE, ncolumns=5000)
