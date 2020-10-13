@@ -88,4 +88,5 @@ s_max <- extractFeatures(nmf_res_liver, method = "max")
 s_kim <- extractFeatures(nmf_res_liver)
 
 lapply(s_max, write, "./liver_module_max.txt", append = TRUE, ncolumns=5000)
+lapply(s_max, cat, "\n", file = "./liver_module_max.txt", append = TRUE)
 # lapply(s_kim, write, "./liver_module_kim.txt", append = TRUE, ncolumns=5000)
