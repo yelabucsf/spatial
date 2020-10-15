@@ -1,0 +1,146 @@
+\documentclass{article}
+
+\begin{document}
+
+This script performs differential expression analysis using the decontaminated data, between mc38 cells and hepatocytes. The volcano plot is generated. 
+
+<<package>>=
+library(tidyverse)
+library(loomR)
+library(Seurat)
+library(ggrepel)
+@
+
+<<data>>=
+setwd("~/Documents/projects/spatial-genomics")
+lfile <- connect(filename = "./data/all_batches_concat.loom", mode = "r+", skip.validate = TRUE)
+
+cell_names <- lfile[["col_attrs/obs_names"]][]
+cell_names <- make.names(cell_names, allow_ = F)
+
+cell_types <- lfile[["col_attrs/CellType"]][]
+batch <- lfile[["col_attrs/batch"]][]
+barcode <- lfile[["col_attrs/barcode"]][]
+n_counts <- as.numeric(lfile[["col_attrs/n_counts"]][])
+
+
+decont_mat <- read.csv("./decontam/decont_mat/decont_mat_after_v2.csv", row.names = 1)
+dim(decont_mat) # 55287 genes, 10280 cells (the 59 contaminated genes were removed)
+cells_decont <- colnames(decont_mat)
+cells_decont <- make.names(cells_decont, allow_ = F)
+# sum(cell_names == cells_decont) # 10280
+gene_names <- rownames(decont_mat)
+raw_obs <- as.data.frame(cbind(barcode, cell_names, cell_types, batch, n_counts))
+@
+
+<<>>=
+# map (X, Y) coordinates
+plate23_map <- read.csv("./data/plate23_map.csv", header=FALSE)
+colnames(plate23_map) <- c("barcode", "X", "Y")
+obs_xy <- merge(raw_obs, plate23_map, by = "barcode")
+obs_xy$Y_hex <- obs_xy$Y - (obs_xy$X %% 2) / 2
+obs_xy$location <- paste0(obs_xy$batch, "_", obs_xy$X, "_", obs_xy$Y_hex)
+# filter the gene expression data
+mat_filter_raw <- decont_mat[grep("mm10", rownames(decont_mat)), ]
+dim(mat_filter_raw) # 24917 genes by 10280 cells
+mat_filter <- mat_filter_raw[which(rowSums(mat_filter_raw) != 0), which(colSums(mat_filter_raw) != 0)]
+dim(mat_filter) # 23554 genes by 10276 cells
+
+# filtering genes with larger than 100 counts in target cells (hepatocytes in all the regions)
+
+# identify tumor and hepatocyte cells in all the regions
+target_cell <- raw_obs[raw_obs$cell_types %in% c("Hepatocyte", "mc38"), "cell_names"]
+length(target_cell) # 5732 tumors and hepatocytes
+
+gene_to_filter <- rowSums(mat_filter[, colnames(mat_filter) %in% target_cell]) >= 101
+sum(gene_to_filter) # 10095 genes
+
+mat_genefilter <- mat_filter[which(gene_to_filter), ] # 10095 genes by 10276 cells
+dim(mat_genefilter)
+
+# removed 3 cells with zero gene transcripts after filtering
+# note that none of them are either mc38 or hepatocytes, and downstream analysis was not affected. 
+mat_gene_filter_new <- mat_genefilter[, which(colSums(mat_genefilter) != 0)]
+dim(mat_gene_filter_new) # 10095 genes by 10273 cells
+
+# # normalize gene expression data
+# # multiplied each entry by (median / current_sum) so that the sum across the row is equal to the median.
+med_sum <- median(colSums(mat_gene_filter_new)) #  517.663
+mat_normalized_t <- apply(mat_gene_filter_new, 2, function(i) i * med_sum / sum(i))
+mat_normalized <- t(mat_normalized_t)
+dim(mat_normalized) # 10273 cells by 10095 genes
+range(rowSums(mat_normalized))
+
+rm(mat_normalized_t, mat_filter, mat_filter_raw, plate23_map)
+dim(mat_normalized) # 10276 cells by 10095 genes (normalized across all the cells)
+@
+
+# Differential expression analysis of hepatocytes between mc38 and hepatocyte cells. 
+
+<<>>=
+mat_tumor_hepato <- mat_normalized[rownames(mat_normalized) %in% target_cell, ]
+dim(mat_tumor_hepato) # 5732 tumor or hepatocyte cells in all the regions, by 10095 genes
+
+tumor_cell <- obs_xy[obs_xy$cell_types == "mc38", "cell_names"]
+length(tumor_cell) # 2897 tumor cells
+metadata <- data.frame("cell_names" = rownames(mat_tumor_hepato),
+                       "cell_types" = rep("hepato", nrow(mat_tumor_hepato)))
+metadata[metadata$cell_names %in% tumor_cell, "cell_types"] <- rep("tumor", length(tumor_cell))
+table(metadata$cell_types)
+# hepato  tumor 
+# 2835   2897
+
+p_val_tumor_hepato <- rep(NA, ncol(mat_tumor_hepato))
+log2_fc_tumor_hepato <- rep(NA, ncol(mat_tumor_hepato))
+for(gene_i in 1:ncol(mat_tumor_hepato)){
+  wilcox_df_tumor_hepato <- data.frame(region = metadata$cell_types,
+                                       type = ifelse(metadata$cell_types == "tumor", 1, 0),
+                                       expression = mat_tumor_hepato[, gene_i])
+  wilcox_result_tumor_hepato <- wilcox.test(expression ~ type, wilcox_df_tumor_hepato)
+  p_val_tumor_hepato[gene_i] <- wilcox_result_tumor_hepato$p.value
+  numer_tumor_hepato <- mean(wilcox_df_tumor_hepato[wilcox_df_tumor_hepato$region == "tumor", 
+                                                    "expression"])
+  denom_tumor_hepato <-mean(wilcox_df_tumor_hepato[wilcox_df_tumor_hepato$region == "hepato", 
+                                                   "expression"])
+  log2_fc_tumor_hepato[gene_i] <- log2(numer_tumor_hepato / denom_tumor_hepato)
+}
+
+q_val_tumor_hepato <- p.adjust(p_val_tumor_hepato, method = "BH", n = length(p_val_tumor_hepato))
+ 
+de_df_tumor_hepato <- data.frame(gene_names = substring(colnames(mat_tumor_hepato), 6),
+                                 Pval = p_val_tumor_hepato,
+                                 Qval = q_val_tumor_hepato,
+                                 log2fc = log2_fc_tumor_hepato)
+dim(de_df_tumor_hepato)
+sum((de_df_tumor_hepato$log2fc == 0))
+sum(de_df_tumor_hepato$Qval < 0.05) # 8702
+
+de_df_tumor_hepato[de_df_tumor_hepato$gene_names == "Slc38a3", "gene_names"] <- "Snat3"
+
+de_df_new_tumor_hepato <- de_df_tumor_hepato[order(de_df_tumor_hepato$Qval), ] %>%
+  mutate(thres = case_when(Qval < 0.05 ~ "significant",
+                           TRUE ~ "non-significant")) %>%
+  mutate(coloring = case_when(thres == "non-significant"~ "black",
+                              log2fc > 0 ~ "red",
+                              TRUE ~ "blue")) %>%
+  mutate(labeling = case_when(Qval < 1e-300 & coloring == "red" ~ "1",
+                              Qval < 1e-300 & coloring == "blue" ~ "1", 
+                              TRUE ~ "0"))
+sum(de_df_new_tumor_hepato$thres == "significant") # 8702
+sum(de_df_new_tumor_hepato$labeling == 1)
+write.csv(de_df_new_tumor_hepato, file = "~/Documents/Github/spatial-genomics/data/de_genes_tumor_hepato/decont_tumor_hepato_8702marker_genes.csv")
+
+plot_df_tumor_hepato <- de_df_new_tumor_hepato # %>% filter(Qval != 1)
+ggplot(plot_df_tumor_hepato) +
+  geom_jitter(aes(x = log2fc, y = -log10(Qval)), 
+             colour = plot_df_tumor_hepato$coloring, alpha = 0.5, 
+             shape = ifelse(plot_df_tumor_hepato$labeling == 1, 17, 16)) +
+  geom_text_repel(aes(x = log2fc, y = -log10(Qval), 
+                      label = ifelse(labeling == 1, gene_names, ""))) +
+  ggtitle("Differentially expressed hepatocyte genes in spatial proximity to tumor cells") +
+  xlab("log2FC") + 
+  ylab("-log10(corrected p-value)") +
+  theme_classic()
+@
+
+\end{document}
