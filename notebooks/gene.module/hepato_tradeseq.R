@@ -53,39 +53,39 @@ liver_mat_norm <- t(mat_normalized_t)
 # sum(rowSums(liver_mat_norm) == med_sum)
 dim(liver_mat_norm) # 5434 cells by 14222 genes (normalized across all the cells)
 
-# 6. select-mc38
+# 6. select hepatocytes
 # dim(liver_obs) # 5434 cells by 22 annotations
 # sum(liver_obs$cell_iden == rownames(liver_mat_norm)) # 5434
-liver_mc38_mat_norm <- liver_mat_norm[liver_obs$CellType == "mc38", ]
-# dim(liver_mc38_mat_norm) # 2256 cells by 14222 genes
-liver_mc38_obs <- liver_obs[liver_obs$CellType == "mc38", ]
-# table(liver_mc38_obs$batch)
-liver_mc38_mat_unnorm <- round(t(liver_mat_filter)[liver_obs$CellType == "mc38", ])
-# dim(liver_mc38_mat_unnorm) # 2256 cells by 14222 genes
-# range(liver_mc38_mat_unnorm) # 0-224
+liver_hepato_mat_norm <- liver_mat_norm[liver_obs$CellType == "Hepatocyte", ]
+# dim(liver_hepato_mat_norm) # 1713 cells by 14222 genes
+liver_hepato_obs <- liver_obs[liver_obs$CellType == "Hepatocyte", ]
+# table(liver_hepato_obs$batch)
+liver_hepato_mat_unnorm <- round(t(liver_mat_filter)[liver_obs$CellType == "Hepatocyte", ])
+# dim(liver_hepato_mat_unnorm) # 1713 cells by 14222 genes
+# range(liver_hepato_mat_unnorm) # 0-163
 
-# which gene has zero counts in mc38
-liver_mc38_mat_unnorm_filter <- liver_mc38_mat_unnorm[, which(colSums(liver_mc38_mat_unnorm) != 0)]
-dim(liver_mc38_mat_unnorm_filter) # 2256 cells by 14181 genes
+# which gene has zero counts in hepato
+liver_hepato_mat_unnorm_filter <- liver_hepato_mat_unnorm[, which(colSums(liver_hepato_mat_unnorm) != 0)]
+dim(liver_hepato_mat_unnorm_filter) # 1713 cells by 13963 genes
 
 # 7. ZI-weights-zinbwave
 registerDoParallel(num_cores)
 register(DoparParam())
 # table(liver_obs$bins_1)
-sum_exp_obj <- SummarizedExperiment(t(liver_mc38_mat_unnorm_filter), 
-                             colData = data.frame(bin = liver_mc38_obs$bins_1, 
-                                                  batch = liver_mc38_obs$batch))
+sum_exp_obj <- SummarizedExperiment(t(liver_hepato_mat_unnorm_filter), 
+                                    colData = data.frame(bin = liver_hepato_obs$bins_1, 
+                                                         batch = liver_hepato_obs$batch))
 zinb_res <- zinbFit(sum_exp_obj, X = '~ bin + batch', 
-                  commondispersion = TRUE)
+                    commondispersion = TRUE)
 
-save(zinb_res, file = "./zinb_fit.rda")
-zinb_weights <- computeObservationalWeights(zinb_res, t(liver_mc38_mat_unnorm_filter))
+save(zinb_res, file = "./hepato_zinb_fit.rda")
+zinb_weights <- computeObservationalWeights(zinb_res, t(liver_hepato_mat_unnorm_filter))
 
 # 8. tradeSeq
-gam_list <- tradeSeq::fitGAM(t(liver_mc38_mat_unnorm_filter),
-                             U = model.matrix(~ - 1 + liver_mc38_obs$batch + liver_mc38_obs$bins_1), 
-                             pseudotime = liver_mc38_obs$prox_2, 
-                             cellWeights = rep(1, nrow(liver_mc38_obs)), 
+gam_list <- tradeSeq::fitGAM(t(liver_hepato_mat_unnorm_filter),
+                             U = model.matrix(~ - 1 + liver_hepato_obs$batch + liver_hepato_obs$bins_1), 
+                             pseudotime = liver_hepato_obs$prox_2, 
+                             cellWeights = rep(1, nrow(liver_hepato_obs)), 
                              weights = zinb_weights, 
                              nknots = 6)
-save(gam_list, file = "./tradeseq_list.rda")
+save(gam_list, file = "./hepato_tradeseq_list.rda")
