@@ -65,17 +65,27 @@ liver_mc38_mat_unnorm <- round(t(liver_mat_filter)[liver_obs$CellType == "mc38",
 # range(liver_mc38_mat_unnorm) # 0-224
 
 # which gene has zero counts in mc38
-liver_mc38_mat_unform_filter <- liver_mc38_mat_unnorm[, which(colSums(liver_mc38_mat_unnorm) != 0)]
-dim(liver_mc38_mat_unform_filter) # 2256 cells by 14181 genes
+liver_mc38_mat_unnorm_filter <- liver_mc38_mat_unnorm[, which(colSums(liver_mc38_mat_unnorm) != 0)]
+dim(liver_mc38_mat_unnorm_filter) # 2256 cells by 14181 genes
 
 # 7. ZI-weights-zinbwave
 registerDoParallel(num_cores)
 register(DoparParam())
 # table(liver_obs$bins_1)
-sum_exp_obj <- SummarizedExperiment(t(liver_mc38_mat_unform_filter), 
+sum_exp_obj <- SummarizedExperiment(t(liver_mc38_mat_unnorm_filter), 
                              colData = data.frame(bin = liver_mc38_obs$bins_1, 
                                                   batch = liver_mc38_obs$batch))
 zinb_res <- zinbFit(sum_exp_obj, X = '~ bin + batch', 
                   commondispersion = TRUE)
 
 save(zinb_res, file = "./zinb_fit.rda")
+zinb_weights <- computeObservationalWeights(zinb_res, t(liver_mc38_mat_unnorm_filter))
+
+# 8. tradeSeq
+gam_list <- tradeSeq::fitGAM(t(liver_mc38_mat_unnorm_filter),
+                             U = model.matrix(~ - 1 + liver_mc38_obs$batch + liver_mc38_obs$bins_1), 
+                             pseudotime = liver_mc38_obs$prox_2, 
+                             cellWeights = rep(1, nrow(liver_mc38_obs)), 
+                             weights = zinb_weights, 
+                             nknots = 6)
+save(gam_list, file = "./tradeseq_list.rda")
