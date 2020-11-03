@@ -1,0 +1,275 @@
+\documentclass{article}
+
+\begin{document}
+
+gene module is identified using scRNA-seq dataset, while the clustering of ST spots was performed on bulk ST data.  
+
+<<package>>=
+library("reticulate")
+use_python("/Applications/anaconda3/bin/python3", required = T)
+sc <- import("scanpy")
+
+library(tidyverse)
+library(NMF)
+@
+
+Spleen data is not decontaminated but preprocessed by Derek. 
+
+<<>>=
+setwd("~/Documents/projects/spatial-genomics")
+
+# raw spleen data
+spleen_raw_h5ad <- sc$read_h5ad("./data/spleen.concat.raw_counts.h5ad")
+spleen_raw_h5ad # 7505 cells, 52025 genes
+spleen_mat_raw <- spleen_raw_h5ad$X
+rownames(spleen_mat_raw) <- make.names(spleen_raw_h5ad$obs_names$to_list(), allow_ = F)
+colnames(spleen_mat_raw) <- spleen_raw_h5ad$var_names$to_list()
+
+# selected cells with proximity score
+spleen_preprocessed_h5ad <- sc$read_h5ad("./data/spleen.concat.adjustedXY.with_raw.with_prox_score.h5ad")
+spleen_preprocessed_h5ad # 3394 cells, 52025 genes
+spleen_cell_names <- make.names(spleen_preprocessed_h5ad$obs_names$to_list(), allow_ = F)
+spleen_obs_raw <- spleen_preprocessed_h5ad$obs
+spleen_obs_raw$cell_iden <- rownames(spleen_obs_raw) <- make.names(rownames(spleen_obs_raw), allow_ = F)
+summary(spleen_obs_raw$prox_score)
+
+sum(spleen_raw_h5ad$var_names$to_list() == spleen_preprocessed_h5ad$var_names$to_list())
+spleen_mat_t <- spleen_mat_raw[rownames(spleen_mat_raw) %in%spleen_cell_names,
+                                  # selected cells only
+                                grep("mm10", colnames(spleen_mat_raw))]# mouse genes only
+spleen_mat <- t(spleen_mat_t)
+dim(spleen_mat) # 22810 genes by 3394 cells
+
+# 2d coordinates
+plate23_map <- read.csv("~/Documents/GitHub/spatial-genomics/data/plate23_map.csv", header=FALSE)
+colnames(plate23_map) <- c("barcode", "X", "Y_raw")
+plate23_map$Y <- plate23_map$Y_raw - (plate23_map$X %% 2) / 2
+spleen_obs1 <- merge(spleen_obs_raw %>% select(- c(X, Y)), 
+                       plate23_map %>% select(- Y_raw), 
+                       by = "barcode")
+spleen_obs1 <- spleen_obs1 %>%
+  slice(match(colnames(spleen_mat), cell_iden))
+spleen_obs1$location <- paste0(spleen_obs1$batch, "_", spleen_obs1$X, "_",
+                              spleen_obs1$Y)
+
+# load region annotations
+spleen_regions <- read.csv("~/Documents/GitHub/spatial-genomics/data/spleen.regions.csv", 
+                           row.names = 1)
+
+colnames(spleen_regions) <- c("batch", "X", "Y_raw", "region")
+spleen_regions$Y <- spleen_regions$Y_raw - (spleen_regions$X %% 2) / 2
+spleen_regions$location <- paste0(spleen_regions$batch, "_", spleen_regions$X, "_",
+                              spleen_regions$Y)
+spleen_obs <- merge(spleen_obs1, spleen_regions %>% select(c("region", "location")),
+                    by = "location")
+spleen_obs <- spleen_obs %>% 
+  slice(match(colnames(spleen_mat), cell_iden))
+# 0:tumor, 1:boundary, 2:liver/spleen (to be verified from George)
+
+# sum(colnames(spleen_mat) == spleen_obs$cell_iden)
+@
+
+3. normalize and preprocess the data.
+<<>>=
+genes_to_keep <- which(rowSums(edgeR::cpm(spleen_mat) > 5) >= 15)
+# tradeSeq: gene by cell in cufflinksCountData
+spleen_mat_filter_raw <- spleen_mat[genes_to_keep, ]
+dim(spleen_mat_filter_raw) # 12156 genes by 3394 cells
+
+# 4.5 select top 2000 most variable genes
+# convert to log 2 counts per million
+spleen_mat_log2 <- edgeR::cpm(spleen_mat_filter_raw, log = TRUE)
+dim(spleen_mat_log2) # 12156 by 3394
+Calc_CV <- function(x){sd(x) / mean(x)}
+spleen_gene_cv <- apply(spleen_mat_log2, 1, Calc_CV)
+
+num_genes <- 2000 # 2000 or 5000
+spleen_mat_filter <- spleen_mat_log2[which(rank(spleen_gene_cv) > 
+                                             length(spleen_gene_cv) - num_genes), ]
+dim(spleen_mat_filter) # num_genes genes by 3394 cells
+@
+
+2. identify tumor-specific gene modules using NMF 
+ - center the expression matrix individually by removing the mean expression 
+   for each gene.
+ - set negative values to zero.
+ - perform sparse nonsmooth NMF using nsNMF function in NMF package (rank = 20). 
+ 
+<<filter-tumor>>=
+# sum(spleen_obs$cell_iden == colnames(spleen_mat_filter))
+spleen_tumor_mat_norm <- t(spleen_mat_filter[, spleen_obs$CellType == "mc38"])
+dim(spleen_tumor_mat_norm) # 2152 cells by 2000 genes
+@
+
+<<spleen-NMF>>=
+spleen_tumor_mat_center <- spleen_tumor_mat_norm - colMeans(spleen_tumor_mat_norm)[col(spleen_tumor_mat_norm)]
+# range(colMeans(spleen_tumor_mat_center))
+spleen_tumor_mat_nn <- spleen_tumor_mat_center
+spleen_tumor_mat_nn[spleen_tumor_mat_nn < 0] <- 0
+dim(spleen_tumor_mat_nn) # 2152 cells and 2000 genes
+spleen_tumor_mat_nn_sel <- spleen_tumor_mat_nn[, colSums(spleen_tumor_mat_nn) != 0]
+dim(spleen_tumor_mat_nn_sel) #  2152 cells by 2000 genes
+@
+
+<<>>=
+# nmf_res_spleen <- nmf(x = t(spleen_tumor_mat_nn_sel), # feature by sample
+#                      rank = 10, method = "nsNMF")
+# saveRDS(nmf_res_spleen, "~/Documents/projects/spatial-genomics/nmf_result/nmf_res_spleen.rds")
+nmf_res_spleen <- readRDS("~/Documents/projects/spatial-genomics/nmf_result/nmf_res_spleen.rds")
+nmf_res_spleen@fit
+
+s <- extractFeatures(nmf_res_spleen, method = "max")
+colnames(spleen_tumor_mat_nn_sel)[s[[1]]]
+colnames(spleen_tumor_mat_nn_sel)[s[[2]]]
+colnames(spleen_tumor_mat_nn_sel)[s[[3]]]
+colnames(spleen_tumor_mat_nn_sel)[s[[4]]]
+colnames(spleen_tumor_mat_nn_sel)[s[[5]]]
+colnames(spleen_tumor_mat_nn_sel)[s[[6]]]
+colnames(spleen_tumor_mat_nn_sel)[s[[7]]]
+colnames(spleen_tumor_mat_nn_sel)[s[[8]]]
+colnames(spleen_tumor_mat_nn_sel)[s[[9]]]
+colnames(spleen_tumor_mat_nn_sel)[s[[10]]]
+
+# tune ranks:
+# if(requireNamespace("Biobase", quietly=TRUE)){
+#   estim.r <- nmf(x = t(liver_tumor_mat_nn_sel), 
+#                  rank = 10:15, nrun=10, seed=123456)
+# # perform 10 runs for each value of r in range 2:6
+#   if(requireNamespace("Biobase", quietly=TRUE)){
+#     plot(estim.r)
+#   }
+# }
+@
+
+3. map tumor gene modules in spatial transcriptomics data
+
+Use bulk ST data: 
+
+<<>>=
+dim(spleen_mat_filter_raw) # 12156 genes by 3394 cells
+dim(spleen_obs) # 3394 cells by 21 annotations
+sum(colnames(spleen_mat_filter_raw) == spleen_obs$cell_iden) # 3394
+
+well_obs <- as.data.frame(unique(cbind(as.character(spleen_obs$batch), spleen_obs$X, 
+                                       spleen_obs$Y, spleen_obs$location, 
+                                       spleen_obs$prox_score, spleen_obs$region)))
+colnames(well_obs) <- c("batch", "X", "Y", "location", "prox_score", "region")
+well_obs$batch <- as.numeric(well_obs$batch)
+well_obs$X <- as.numeric(well_obs$X)
+well_obs$Y <- as.numeric(well_obs$Y)
+well_obs$prox_score <- as.numeric(well_obs$prox_score)
+dim(well_obs) # 454 wells by 5 attributes
+
+batch_iden <- c("S10C", "S20C2", "S15C", "S20C1")
+
+# ST data analysis
+for(which_batch in 1:4){
+  well_loc_set_batch <- unique(spleen_obs[spleen_obs$batch == (which_batch - 1), 
+                                         "location"])
+  length(well_loc_set_batch)
+  
+  # 1. construct bulk ST data matrix
+  spleen_bulk_mat_batch <- matrix(NA, nrow = nrow(spleen_mat_filter_raw),
+                           ncol = length(well_loc_set_batch))
+  
+  for(which_well in 1:length(well_loc_set_batch)){# for each well in the batch
+    # first identify all the cells in a well
+    cells_iden_each_well <- spleen_obs[spleen_obs$location == well_loc_set_batch[which_well],
+                                      "cell_iden"]
+    # sum over all the counts in each well
+    spleen_bulk_mat_batch[, which_well] <- rowSums(spleen_mat_filter_raw[, 
+                                                        cells_iden_each_well, 
+                                                        drop = FALSE])
+  }
+  # sum(is.na(spleen_bulk_mat_batch)) # 0
+  
+  rownames(spleen_bulk_mat_batch) <- rownames(spleen_mat_filter_raw)
+  
+  # 2. normalize UMI counts in each spot by the total transcript count
+  # scale by the median number transcript count across all the spots
+  med_sum_batch <- median(colSums(spleen_bulk_mat_batch))
+  spleen_bulk_mat_norm_batch <- apply(spleen_bulk_mat_batch, 2, function(j) j * med_sum_batch / sum(j))
+  range(colSums(spleen_bulk_mat_norm_batch))
+  
+  # 3. log 10 transformation with a pseudocount of 1
+  spleen_bulk_mat_log_batch <- log10(spleen_bulk_mat_norm_batch + 1)
+  dim(spleen_bulk_mat_log_batch)
+  
+  # 4. standardize the genes in each module
+  for(which_module in c(1:2, 4:10)){
+   bulk_mat_module_batch <- t(spleen_bulk_mat_log_batch[rownames(spleen_bulk_mat_log_batch) %in% 
+                                              colnames(spleen_tumor_mat_nn_sel)[s[[which_module]]], ])
+   dim(bulk_mat_module_batch)
+   bulk_mat_module_scale_batch <- scale(bulk_mat_module_batch)
+   # apply(bulk_mat_module_scale_batch, 2, mean)
+   # apply(bulk_mat_module_scale_batch, 2, sd)
+   
+   # 5. sum the standardized, log-transformed expression of the genes in the model across all the tumor region spots, and find the mean
+   # identify cancer region spots, which is just all the cells with region == 0
+   tumor_spots_loc <- unique(spleen_obs[(spleen_obs$location %in% well_loc_set_batch) & 
+                                          (spleen_obs$region == 0), "location"])
+                                         # (spleen_obs$prox_score < 0.5), "location"])
+   well_sum_batch <- rowSums(bulk_mat_module_scale_batch)[which(well_loc_set_batch %in% 
+                                                                  tumor_spots_loc)]
+   names(well_sum_batch) <- well_loc_set_batch[which(well_loc_set_batch %in% 
+                                                       tumor_spots_loc)]
+   
+   length(well_sum_batch)
+   # highly expressing module spots
+   high_module_spot_loc_batch <- names(well_sum_batch)[which(well_sum_batch >= median(well_sum_batch))]
+   # lowly expressing module spots
+   low_module_spot_loc_batch <- names(well_sum_batch)[which(well_sum_batch < median(well_sum_batch))]
+   
+   well_obs_batch <- well_obs %>%
+     filter(batch == which_batch - 1)
+   
+   high_module_spot_batch_idx <- which(well_obs_batch$location %in% high_module_spot_loc_batch)
+   low_module_spot_batch_idx <- which(well_obs_batch$location %in% low_module_spot_loc_batch)
+   
+   p_den <- ggplot() +
+     geom_density(data = data.frame(score = well_obs_batch[high_module_spot_batch_idx, "prox_score"]),
+                  aes(x = score), color = "red") +
+     geom_density(data = data.frame(score = well_obs_batch[low_module_spot_batch_idx, "prox_score"]),
+                  aes(x = score), color = "blue") +
+     theme_classic() +
+     xlab("proximity score") +
+     ggtitle(paste0(" Spleen tumor region: Batch ", batch_iden[which_batch], ", Module ", which_module,
+                    ":\n Expressing module spots: red - high, blue - low"))
+   
+   print(p_den)
+   ggsave(paste0("~/Documents/GitHub/spatial-genomics/fig/gene-module/spleen/density_module_",
+                 which_module, "_batch", batch_iden[which_batch], ".png"))
+   
+   
+   hex_x <- cbind(well_obs_batch$X + 1/4, well_obs_batch$X + 1/2,
+                  well_obs_batch$X + 1/4, well_obs_batch$X - 1/4,
+                  well_obs_batch$X - 1/2, well_obs_batch$X - 1/4)
+   hex_y <- cbind(well_obs_batch$Y + sqrt(3)/4, well_obs_batch$Y,
+                  well_obs_batch$Y - sqrt(3)/4, well_obs_batch$Y - sqrt(3)/4,
+                  well_obs_batch$Y, well_obs_batch$Y + sqrt(3)/4)
+   # convert coordinates in long format
+   hexdat_x <- reshape2::melt(cbind(id = 1:length(well_obs_batch$X),
+                                    as.data.frame(hex_x)),
+                              id.vars = "id", value.name = "x")
+   hexdat_y <- reshape2::melt(cbind(id = 1:length(well_obs_batch$Y),
+                                    as.data.frame(hex_y)),
+                              id.vars = "id", value.name = "y")
+   hex_data <- merge(hexdat_x, hexdat_y)
+   
+   p <- ggplot(hex_data, aes(x, -y)) +
+     geom_polygon(aes(group = id), color = "wheat",
+                  fill = ifelse(hex_data$id %in% high_module_spot_batch_idx, 
+                                "red", ifelse(hex_data$id %in% low_module_spot_batch_idx,
+                                              "blue", "grey"))) +
+     ggtitle(paste0(" Spleen tumor region: Batch ", batch_iden[which_batch], ", Module ", which_module,
+                    ":\n Expressing module spots: red - high, blue - low")) +
+     theme_classic()
+   print(p)
+   ggsave(paste0("~/Documents/GitHub/spatial-genomics/fig/gene-module/spleen/hexagon_module_",
+                 which_module, "_batch", batch_iden[which_batch], ".png"))
+  }
+}
+@
+
+
+\end{document}
