@@ -63,7 +63,7 @@ liver_obs <- merge(liver_obs1, liver_regions %>% select(c("region", "location"))
                     by = "location")
 liver_obs <- liver_obs %>% 
   slice(match(colnames(liver_mat), cell_iden))
-# 0:tumor, 1:boundary, 2:liver/spleen (to be verified from George)
+# 0:tumor, 1:boundary, 2:liver/spleen (verified by George)
 
 # sum(colnames(liver_mat) == liver_obs$cell_iden)
 @
