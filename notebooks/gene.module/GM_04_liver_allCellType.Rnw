@@ -1,0 +1,187 @@
+\documentclass{article}
+
+\begin{document}
+
+gene module is identified using scRNA-seq dataset.  
+
+<<package>>=
+library("reticulate")
+use_python("/Users/yolanda/anaconda3/bin/python", required = T)
+sc <- import("scanpy")
+
+library(tidyverse)
+library(Seurat)
+library(NMF)
+@
+
+Liver data is first preprocessed by Derek and then decontaminated by Yutong. 
+Cell type annotation is generated from `XYZeq_fig3_decontaminated_clustering.ipynb`.
+
+<<>>=
+setwd("~/Documents/projects/spatial-genomics")
+
+# decont liver mat 
+load("./data/decont_mat.rda")
+dim(decont_mat) # 55287 genes, 10280 cells (the 59 contaminated genes were removed)
+cell_names_raw <- make.names(colnames(decont_mat), allow_ = F)
+gene_names <- rownames(decont_mat)
+
+# selected cells
+liver_h5ad <- sc$read_h5ad("./data/Processed_Liver_All_Batches_mouse_deconV2_2.h5ad")
+liver_h5ad # 6623 cells by 764 genes
+liver_cell_names <- make.names(liver_h5ad$obs_names$to_list(), allow_ = F)
+liver_obs_raw <- liver_h5ad$obs
+liver_obs_raw$cell_iden <- rownames(liver_obs_raw)
+
+liver_mat <- decont_mat[grep("mm10", rownames(decont_mat)), # mouse genes only
+                        colnames(decont_mat) %in% liver_cell_names] # selected cells only
+dim(liver_mat) # 24917 genes by 6623 cells
+
+# 2d coordinates
+plate23_map <- read.csv("~/Documents/GitHub/spatial-genomics/data/plate23_map.csv", header=FALSE)
+colnames(plate23_map) <- c("barcode", "X", "Y_raw")
+plate23_map$Y <- plate23_map$Y_raw - (plate23_map$X %% 2) / 2
+liver_obs1 <- merge(liver_obs_raw, 
+                    plate23_map %>% select(- Y_raw), 
+                    by = "barcode")
+
+liver_obs1 <- liver_obs1 %>%
+  mutate(batch = case_when(batch == "L10C" ~ 0,
+                           batch == "L20C1" ~ 1,
+                           batch == "L20T" ~ 2, 
+                           TRUE ~ 3))
+liver_obs1 <- liver_obs1 %>%
+  slice(match(colnames(liver_mat), cell_iden))
+liver_obs1$location <- paste0(liver_obs1$batch, "_", liver_obs1$X, "_",
+                              liver_obs1$Y)
+
+
+# load tissue region annotations
+liver_regions <- read.csv("~/Documents/GitHub/spatial-genomics/data/liver.regions.csv", 
+                           row.names = 1)
+
+colnames(liver_regions) <- c("batch", "X", "Y_raw", "region")
+liver_regions$Y <- liver_regions$Y_raw - (liver_regions$X %% 2) / 2
+liver_regions$location <- paste0(liver_regions$batch, "_", liver_regions$X, "_",
+                                 liver_regions$Y)
+liver_obs <- merge(liver_obs1, liver_regions %>% select(c("region", "location")),
+                    by = "location")
+
+liver_obs <- liver_obs %>%
+  mutate(batch_name = case_when(batch == 0 ~ "L10C",
+                                batch == 1 ~ "L20C1",
+                                batch == 2 ~ "L20T", 
+                                TRUE ~ "L30C8"))
+
+liver_obs <- liver_obs %>% 
+  slice(match(colnames(liver_mat), cell_iden))
+# 0:tumor, 1:boundary, 2:liver/spleen (verified by George)
+
+sum(colnames(liver_mat) == liver_obs$cell_iden) # 6623
+
+# saveRDS(liver_mat, "~/Documents/projects/spatial-genomics/nmf_result/liver_mat_6623.rds")
+# liver_mat <- readRDS("~/Documents/projects/spatial-genomics/nmf_result/liver_mat_6623.rds")
+
+# saveRDS(liver_obs, "~/Documents/projects/spatial-genomics/nmf_result/liver_obs_6623.rds")
+# liver_obs <- readRDS("~/Documents/projects/spatial-genomics/nmf_result/liver_obs_6623.rds")
+@
+
+Use sctransform in Seurat:
+<<>>=
+rownames(liver_obs) <- liver_obs$cell_iden
+colnames(liver_obs) <- make.names(colnames(liver_obs), allow_ = F)
+# sctranform normalization replaces NormalizeData, ScaleData, and FindVariableFeatures.
+
+dim(liver_mat) # 24917 genes by 6623 cells
+sum(colnames(liver_mat) == liver_obs$cell.iden) # 6623
+
+liver_sc_obj_sct <- CreateSeuratObject(
+  counts = liver_mat, 
+  meta.data = liver_obs,
+  project = "liver_sc", 
+  min.cells = 5, 
+  min.features = 100)
+
+liver_sc_obj_sct
+# An object of class Seurat 
+# 18290 features across 6524 samples within 1 assay 
+# Active assay: RNA (18290 features, 0 variable features)
+
+liver_sc_obj_sct <- SCTransform(
+  liver_sc_obj_sct, 
+  vars.to.regress = c("n.counts", "batch.name", "percent.mito.mouse"),
+  return.only.var.genes = F)
+liver_sc_obj_sct
+# An object of class Seurat 
+# 36566 features across 6524 samples within 2 assays 
+# Active assay: SCT (18276 features, 3000 variable features)
+#  1 other assay present: RNA
+dim(liver_sc_obj_sct) # 18276  6524
+@
+
+<<>>=
+# the residuals (normalized values) and used as PCA input:
+dim(liver_sc_obj_sct[["SCT"]]@scale.data) # 18276 genes and 6524 cells
+# the corrected UMI counts:
+dim(liver_sc_obj_sct[["SCT"]]@counts) # 18276 genes and 6524 cells
+# log-normalized version of the corrected UMI counts:
+dim(liver_sc_obj_sct[["SCT"]]@data) # 18276 genes and 6524 cells
+
+write.csv(liver_sc_obj_sct[["SCT"]]@data, 
+          file = "~/Documents/projects/spatial-genomics/nmf_result/6623_liver_allCellType_lognormalized_data.csv")
+dim(liver_sc_obj_sct[["SCT"]]@data)
+# saveRDS(liver_sc_obj_sct[["SCT"]]@data, "~/Documents/projects/spatial-genomics/nmf_result/6623_liver_allCellType_lognormalized_data.rds")
+# liver_data <- readRDS("~/Documents/projects/spatial-genomics/nmf_result/6623_liver_allCellType_lognormalized_data.rds")
+@
+
+2. identify tumor-specific gene modules using NMF 
+ - center the expression matrix individually by removing the mean expression 
+   for each gene.
+ - set negative values to zero.
+ - perform sparse nonsmooth NMF using NMF package (rank = 20). 
+ 
+<<>>=
+liver_mat_center <- liver_sc_obj_sct[["SCT"]]@scale.data
+# range(rowMeans(liver_mat_center)) # per gene
+# # -4.755589e-16  4.065868e-16
+# summary(as.numeric(liver_mat_center))
+# #     Min.  1st Qu.   Median     Mean  3rd Qu.     Max. 
+# # -8.36900 -0.11745 -0.05659  0.00000 -0.02406 15.03401
+# plot(density(as.numeric(liver_mat_center)), 
+#      main = "value density")
+@
+
+<<nmf>>=
+liver_mat_nn <- liver_mat_center
+liver_mat_nn[liver_mat_nn < 0] <- 0
+dim(liver_mat_nn) # 18276 genes by 6524 cells
+# which(rowSums(liver_mat_nn) == 0) # named integer(0)
+
+nmf_res_liver <- nmf(x = liver_mat_nn, # feature by sample
+                     rank = 20, method = "brunet")
+nmf_res_liver
+# <Object of class: NMFfit>
+#   # Model:
+#   <Object of class:NMFstd>
+#   features: 18276
+# basis/rank: 20
+# samples: 6524
+# # Details:
+# algorithm:  brunet
+# seed:  random
+# RNG: 10403L, 128L, ..., 1533200667L [cfddc6b78b9acd6f0b977af4ac0b94df]
+# distance metric:  'KL'
+# residuals:  33797184
+# Iterations: 2000
+# Timing:
+#   user   system  elapsed
+# 85891.55   643.93 86591.42
+
+# it takes 24 h to run the script
+
+saveRDS(nmf_res_liver, "~/Documents/projects/spatial-genomics/nmf_result/seurat_nmf_res_liver_all_6623_brunet.rds")
+@
+
+Similarly for other methods which are specified in `nmf` function. 
+
+\end{document}

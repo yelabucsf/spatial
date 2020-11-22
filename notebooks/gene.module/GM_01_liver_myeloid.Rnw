@@ -1,0 +1,175 @@
+\documentclass{article}
+
+\begin{document}
+
+gene module is identified using scRNA-seq dataset, while the clustering of ST spots was performed on bulk ST data.  
+
+<<package>>=
+library("reticulate")
+use_python("/Applications/anaconda3/bin/python3", required = T)
+sc <- import("scanpy")
+
+library(tidyverse)
+library(Seurat)
+library(NMF)
+@
+
+Liver data is decontaminated by Yutong and preprocessed by Derek. 
+`all_batches_mouse_only_raw_proximities.h5ad` is the output of 
+`XYZeq_fig3_decontaminated_clustering.ipynb` and 
+` XYZeq_fig3_decontaminated_spatial.ipynb` for adding the proximity score values. 
+
+<<>>=
+setwd("~/Documents/projects/spatial-genomics")
+
+# decont liver mat 
+load("./data/decont_mat.rda")
+dim(decont_mat) # 55287 genes, 10280 cells (the 59 contaminated genes were removed)
+cell_names_raw <- make.names(colnames(decont_mat), allow_ = F)
+gene_names <- rownames(decont_mat)
+
+# selected cells
+liver_h5ad <- sc$read_h5ad("./data/all_batches_mouse_only_raw_proximities.h5ad")
+liver_h5ad # 5434 cells by 55287 genes
+liver_cell_names <- make.names(liver_h5ad$obs_names$to_list(), allow_ = F)
+liver_obs_raw <- liver_h5ad$obs
+liver_obs_raw$cell_iden <- rownames(liver_obs_raw)
+
+liver_mat <- decont_mat[grep("mm10", rownames(decont_mat)), # mouse genes only
+                        colnames(decont_mat) %in% liver_cell_names] # selected cells only
+dim(liver_mat) # 24917 genes by 5434 cells
+
+# 2d coordinates
+plate23_map <- read.csv("~/Documents/GitHub/spatial-genomics/data/plate23_map.csv", header=FALSE)
+colnames(plate23_map) <- c("barcode", "X", "Y_raw")
+plate23_map$Y <- plate23_map$Y_raw - (plate23_map$X %% 2) / 2
+liver_obs1 <- merge(liver_obs_raw %>% select(- c(X, Y)), 
+                    plate23_map %>% select(- Y_raw), 
+                    by = "barcode")
+liver_obs1 <- liver_obs1 %>%
+  slice(match(colnames(liver_mat), cell_iden))
+liver_obs1$location <- paste0(liver_obs1$batch, "_", liver_obs1$X, "_",
+                              liver_obs1$Y)
+
+
+# load tissue region annotations
+liver_regions <- read.csv("~/Documents/GitHub/spatial-genomics/data/liver.regions.csv", 
+                           row.names = 1)
+
+colnames(liver_regions) <- c("batch", "X", "Y_raw", "region")
+liver_regions$Y <- liver_regions$Y_raw - (liver_regions$X %% 2) / 2
+liver_regions$location <- paste0(liver_regions$batch, "_", liver_regions$X, "_",
+                                 liver_regions$Y)
+liver_obs <- merge(liver_obs1, liver_regions %>% select(c("region", "location")),
+                    by = "location")
+
+liver_obs <- liver_obs %>%
+  mutate(batch_name = case_when(batch == 0 ~ "L10C",
+                                batch == 1 ~ "L20C1",
+                                batch == 2 ~ "L20T", 
+                                TRUE ~ "L30C8"))
+
+liver_obs <- liver_obs %>% 
+  slice(match(colnames(liver_mat), cell_iden))
+# 0:tumor, 1:boundary, 2:liver/spleen (verified by George)
+
+sum(colnames(liver_mat) == liver_obs$cell_iden) # 5434
+@
+
+Use sctransform in Seurat:
+<<>>=
+rownames(liver_obs) <- liver_obs$cell_iden
+colnames(liver_obs) <- make.names(colnames(liver_obs), allow_ = F)
+# sctranform normalization replaces NormalizeData, ScaleData, and FindVariableFeatures.
+
+dim(liver_mat) # 24917 genes by 5434 cells
+sum(colnames(liver_mat) == liver_obs$cell.iden) # 5434
+
+liver_myeloid_sc_obj_sct <- CreateSeuratObject(
+  counts = liver_mat[, liver_obs$CellType == "Macrophage"], 
+  meta.data = liver_obs[liver_obs$CellType == "Macrophage", ],
+  project = "liver_myeloid_sc", 
+  min.cells = 5, 
+  min.features = 100)
+
+liver_myeloid_sc_obj_sct
+# An object of class Seurat 
+# 11133 features across 860 samples within 1 assay 
+# Active assay: RNA (11133 features, 0 variable features)
+
+liver_myeloid_sc_obj_sct <- SCTransform(
+  liver_myeloid_sc_obj_sct, 
+  vars.to.regress = c("n.counts", "batch.name", "percent.mito.mouse"),
+  return.only.var.genes = F)
+liver_myeloid_sc_obj_sct
+# An object of class Seurat 
+# 22257 features across 860 samples within 2 assays 
+# Active assay: SCT (11124 features, 3000 variable features)
+#  1 other assay present: RNA
+@
+
+<<>>=
+# the residuals (normalized values) and used as PCA input:
+dim(liver_myeloid_sc_obj_sct[["SCT"]]@scale.data) # 11124 genes and 860 cells
+# the corrected UMI counts:
+dim(liver_myeloid_sc_obj_sct[["SCT"]]@counts) # 11124 genes and 860 cells
+# log-normalized version of the corrected UMI counts:
+dim(liver_myeloid_sc_obj_sct[["SCT"]]@data) # 11124 genes and 860 cells
+@
+
+2. identify tumor-specific gene modules using NMF 
+ - center the expression matrix individually by removing the mean expression 
+   for each gene.
+ - set negative values to zero.
+ - perform sparse nonsmooth NMF using nsNMF function in NMF package (rank = 20). 
+ 
+<<>>=
+liver_myeloid_mat_center <- liver_myeloid_sc_obj_sct[["SCT"]]@scale.data
+range(rowMeans(liver_myeloid_mat_center)) # per gene
+summary(as.numeric(liver_myeloid_mat_center))
+plot(density(as.numeric(liver_myeloid_mat_center)), 
+     main = "value density")
+@
+
+<<nmf>>=
+liver_myeloid_mat_nn <- liver_myeloid_mat_center
+liver_myeloid_mat_nn[liver_myeloid_mat_nn < 0] <- 0
+dim(liver_myeloid_mat_nn) # 11124 genes by 860 cells
+# which(rowSums(liver_myeloid_mat_nn) == 0)
+
+nmf_res_liver_myeloid <- nmf(x = liver_myeloid_mat_nn, # feature by sample
+                     rank = 20, method = "brunet")
+nmf_res_liver_myeloid
+ # Timing:
+ #      user   system  elapsed 
+ #  1501.996   16.187 1540.511 
+@
+
+<<>>=
+# saveRDS(nmf_res_liver_myeloid, "~/Documents/projects/spatial-genomics/nmf_result/seurat_nmf_res_liver_myeloid.rds")
+# nmf_res_liver_myeloid <- readRDS("~/Documents/projects/spatial-genomics/nmf_result/seurat_nmf_res_liver_myeloid.rds")
+
+nmf_res_liver_myeloid@fit
+
+# saveRDS(liver_myeloid_mat_nn, "~/Documents/projects/spatial-genomics/nmf_result/liver_myeloid_mat_nn.rds")
+# liver_myeloid_mat_nn <- readRDS("~/Documents/projects/spatial-genomics/nmf_result/liver_myeloid_mat_nn.rds")
+
+s_liver <- extractFeatures(nmf_res_liver_myeloid, method = "max")
+
+
+# tune ranks:
+# if(requireNamespace("Biobase", quietly=TRUE)){
+#   estim.r <- nmf(x = t(liver_tumor_mat_nn_sel), 
+#                  rank = 10:15, nrun=10, seed=123456)
+# # perform 10 runs for each value of r in range 2:6
+#   if(requireNamespace("Biobase", quietly=TRUE)){
+#     plot(estim.r)
+#   }
+# }
+@
+
+
+CLUSTERING TBC ...
+
+
+\end{document}

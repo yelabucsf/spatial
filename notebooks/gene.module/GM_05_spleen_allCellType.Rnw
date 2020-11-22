@@ -1,0 +1,174 @@
+\documentclass{article}
+
+\begin{document}
+
+gene module is identified using scRNA-seq dataset. 
+
+<<package>>=
+library("reticulate")
+use_python("/Applications/anaconda3/bin/python3", required = T)
+sc <- import("scanpy")
+
+library(tidyverse)
+library(Seurat)
+library(NMF)
+@
+
+Spleen data is not decontaminated and preprocessed by Derek. 
+
+<<>>=
+setwd("~/Documents/projects/spatial-genomics")
+
+# raw spleen data
+spleen_raw_h5ad <- sc$read_h5ad("./data/spleen.concat.raw_counts.h5ad")
+spleen_raw_h5ad # 7505 cells, 52025 genes
+spleen_mat_raw <- spleen_raw_h5ad$X
+rownames(spleen_mat_raw) <- make.names(spleen_raw_h5ad$obs_names$to_list(), allow_ = F)
+colnames(spleen_mat_raw) <- spleen_raw_h5ad$var_names$to_list()
+
+# selected cells with proximity score
+spleen_preprocessed_h5ad <- sc$read_h5ad("./data/spleen.concat.adjustedXY.with_raw.with_prox_score.h5ad")
+spleen_preprocessed_h5ad # 3394 cells, 52025 genes
+spleen_cell_names <- make.names(spleen_preprocessed_h5ad$obs_names$to_list(), allow_ = F)
+spleen_obs_raw <- spleen_preprocessed_h5ad$obs
+spleen_obs_raw$cell_iden <- rownames(spleen_obs_raw) <- make.names(rownames(spleen_obs_raw), allow_ = F)
+summary(spleen_obs_raw$prox_score)
+
+sum(spleen_raw_h5ad$var_names$to_list() == spleen_preprocessed_h5ad$var_names$to_list())
+spleen_mat_t <- spleen_mat_raw[rownames(spleen_mat_raw) %in%spleen_cell_names,
+                                  # selected cells only
+                                grep("mm10", colnames(spleen_mat_raw))]# mouse genes only
+spleen_mat <- t(spleen_mat_t)
+dim(spleen_mat) # 22810 genes by 3394 cells
+
+# 2d coordinates
+plate23_map <- read.csv("~/Documents/GitHub/spatial-genomics/data/plate23_map.csv", header=FALSE)
+colnames(plate23_map) <- c("barcode", "X", "Y_raw")
+plate23_map$Y <- plate23_map$Y_raw - (plate23_map$X %% 2) / 2
+spleen_obs1 <- merge(spleen_obs_raw %>% select(- c(X, Y)), 
+                       plate23_map %>% select(- Y_raw), 
+                       by = "barcode")
+spleen_obs1 <- spleen_obs1 %>%
+  slice(match(colnames(spleen_mat), cell_iden))
+spleen_obs1$location <- paste0(spleen_obs1$batch, "_", spleen_obs1$X, "_",
+                              spleen_obs1$Y)
+
+# load region annotations
+spleen_regions <- read.csv("~/Documents/GitHub/spatial-genomics/data/spleen.regions.csv", 
+                           row.names = 1)
+
+colnames(spleen_regions) <- c("batch", "X", "Y_raw", "region")
+spleen_regions$Y <- spleen_regions$Y_raw - (spleen_regions$X %% 2) / 2
+spleen_regions$location <- paste0(spleen_regions$batch, "_", spleen_regions$X, "_",
+                              spleen_regions$Y)
+spleen_obs <- merge(spleen_obs1, spleen_regions %>% select(c("region", "location")),
+                    by = "location")
+# 0:tumor, 1:boundary, 2:liver/spleen (verified by George)
+spleen_obs <- spleen_obs %>% 
+  slice(match(colnames(spleen_mat), cell_iden))
+
+spleen_obs <- spleen_obs %>%
+  mutate(batch_name = case_when(batch == 0 ~ "S10C",
+                                batch == 1 ~ "S20C2",
+                                batch == 2 ~ "S20C1", 
+                                TRUE ~ "S15C"))
+
+sum(colnames(spleen_mat) == spleen_obs$cell_iden) # 3394
+
+# saveRDS(spleen_mat, "~/Documents/projects/spatial-genomics/nmf_result/spleen_mat.rds")
+# spleen_mat <- readRDS("~/Documents/projects/spatial-genomics/nmf_result/spleen_mat.rds")
+
+# saveRDS(spleen_obs, "~/Documents/projects/spatial-genomics/nmf_result/spleen_obs.rds")
+# spleen_obs <- readRDS("~/Documents/projects/spatial-genomics/nmf_result/spleen_obs.rds")
+@
+
+Use sctransform in Seurat:
+<<>>=
+rownames(spleen_obs) <- spleen_obs$cell_iden
+colnames(spleen_obs) <- make.names(colnames(spleen_obs), allow_ = F)
+# sctranform normalization replaces NormalizeData, ScaleData, and FindVariableFeatures.
+
+dim(spleen_mat) # 22810 genes by 3394 cells
+sum(colnames(spleen_mat) == spleen_obs$cell.iden) # 3394
+
+spleen_sc_obj_sct <- CreateSeuratObject(
+  counts = spleen_mat, 
+  meta.data = spleen_obs,
+  project = "spleen_sc", 
+  min.cells = 5, 
+  min.features = 100)
+
+spleen_sc_obj_sct
+# An object of class Seurat 
+# 14854 features across 3394 samples within 1 assay 
+# Active assay: RNA (14854 features, 0 variable features)
+
+spleen_sc_obj_sct <- SCTransform(
+  spleen_sc_obj_sct, 
+  vars.to.regress = c("n.counts", "batch.name", "percent.mito.mouse"),
+  return.only.var.genes = F)
+spleen_sc_obj_sct
+# An object of class Seurat 
+# 29708 features across 3394 samples within 2 assays 
+# Active assay: SCT (14854 features, 3000 variable features)
+#  1 other assay present: RNA
+@
+
+<<>>=
+# the residuals (normalized values) and used as PCA input:
+dim(spleen_sc_obj_sct[["SCT"]]@scale.data) # 14854 genes and 3394 cells
+# the corrected UMI counts:
+dim(spleen_sc_obj_sct[["SCT"]]@counts) # 14854 genes and 3394 cells
+# log-normalized version of the corrected UMI counts:
+dim(spleen_sc_obj_sct[["SCT"]]@data) # 14854 genes and 3394 cells
+@
+
+2. identify tumor-specific gene modules using NMF 
+ - center the expression matrix individually by removing the mean expression 
+   for each gene.
+ - set negative values to zero.
+ - perform sparse nonsmooth NMF using nsNMF function in NMF package (rank = 20). 
+ 
+<<>>=
+spleen_mat_center <- spleen_sc_obj_sct[["SCT"]]@scale.data
+range(rowMeans(spleen_mat_center)) # per gene
+summary(as.numeric(spleen_mat_center))
+plot(density(as.numeric(spleen_mat_center)), 
+     main = "value density")
+@
+
+<<nmf>>=
+spleen_mat_nn <- spleen_mat_center
+spleen_mat_nn[spleen_mat_nn < 0] <- 0
+dim(spleen_mat_nn) # 14854 genes by 3394 cells
+# which(rowSums(spleen_mat_nn) == 0)
+
+nmf_res_spleen <- nmf(x = spleen_mat_nn, # feature by sample
+                     rank = 20, method = "brunet")
+nmf_res_spleen
+# <Object of class: NMFfit>
+#  # Model:
+#   <Object of class:NMFstd>
+#   features: 14854
+#   basis/rank: 20
+#   samples: 3394
+#  # Details:
+#   algorithm:  brunet
+#   seed:  random
+#   RNG: 10403L, 128L, ..., 1533200667L [cfddc6b78b9acd6f0b977af4ac0b94df]
+#   distance metric:  'KL'
+#   residuals:  17760829
+#   Iterations: 2000
+#   Timing:
+#        user    system   elapsed
+#   33116.615   177.102 33288.618
+# It takes 9.3 h to run the script on the server. 
+@
+
+<<>>=
+nmf_res_spleen <- readRDS("~/Documents/projects/spatial-genomics/nmf_result/seurat_nmf_res_spleen.rds")
+nmf_res_spleen@fit
+@
+
+
+\end{document}

@@ -1,0 +1,265 @@
+\documentclass{article}
+
+\begin{document}
+
+<<variable>>=
+nmf_model <- "pe-nmf" # "brunet", "pe-nmf", "offset", "nsNMF"
+n_genes <- 50 # 50, 100, 150, 200
+@
+
+Please specify the NMF method and number of top contributing genes in the very 
+first chunk before you run the script. 
+
+The whole script is automated to identify the overlapping genes from the top 
+`n_genes` genes between liver and spleen. For each liver module, there is one
+spleen module that has the maximal number of overlapping genes (among the top 
+`n_genes`).
+
+The overlapping gene list, matrix plot, overlapping heatmap, and overlapping bar 
+plot are all generated. 
+
+<<package>>=
+library(NMF)
+library(toOrdinal)
+library(tidyverse)
+library(viridis) 
+library(gridExtra)
+library(pheatmap)
+@
+
+Load the pre-saved preprocessed gene expression data and cell covariates, as well 
+as the NMF output generated using the Antaeus server in Song Lab. 
+
+<<data>>=
+spleen_mat_nn <- readRDS("~/Documents/projects/spatial-genomics/nmf_result/spleen_mat_nn.rds")
+nmf_res_spleen <- readRDS("~/Documents/projects/spatial-genomics/nmf_result/seurat_nmf_res_spleen.rds") 
+nmf_res_spleen@fit
+# <Object of class:NMFstd>
+# features: 14854 
+# basis/rank: 20 
+# samples: 3394 
+
+liver_mat_nn <- readRDS("~/Documents/projects/spatial-genomics/6623_nmf_result/liver_mat_nn_all_6623.rds")
+nmf_res_liver <- readRDS(paste0("~/Documents/projects/spatial-genomics/6623_nmf_result/seurat_nmf_res_liver_all_6623_", nmf_model, ".rds"))
+nmf_res_liver@fit
+# <Object of class:NMFstd>
+# features: 18276 
+# basis/rank: 20 
+# samples: 6524 
+
+liver_data <- readRDS("~/Documents/projects/spatial-genomics/6623_nmf_result/liver_allCellType_lognormalized_data_6623.rds")
+liver_obs <- readRDS("~/Documents/projects/spatial-genomics/6623_nmf_result/liver_allCellType_obs_6623.rds")
+dim(liver_data) # 18276 genes by 6524 cells
+class(liver_data)
+dim(liver_obs) # 6524 cells by 28 annotations
+@
+
+<<>>=
+s_liver_kim <- extractFeatures(nmf_res_liver, method = "kim")
+
+s_liver_max <- extractFeatures(nmf_res_liver, method = "max")
+@
+
+Identify and write out overlapping gene list for each liver module.
+
+<<module>>=
+# 1. LIVER MODULE: 
+
+s_liver <- extractFeatures(nmf_res_liver, n_genes)
+
+num_liver_modules <- 20
+liver_module <- data.frame(rep(NA, n_genes))
+
+for(i in 1:num_liver_modules){
+  liver_module <- cbind(liver_module, 
+                        substring(rownames(liver_mat_nn)[s_liver[[i]]], 6))
+}
+
+liver_module <- liver_module[, -1]
+colnames(liver_module) <- paste0("module", 1:num_liver_modules)
+dim(liver_module)
+
+# 2. SPLEEN MODULE: 
+s_spleen <- extractFeatures(nmf_res_spleen, n_genes)
+
+num_spleen_modules <- 20
+spleen_module <- data.frame(rep(NA, n_genes))
+
+for(i in 1:num_spleen_modules){
+  spleen_module <- cbind(spleen_module, 
+                         substring(rownames(spleen_mat_nn)[s_spleen[[i]]], 8))
+}
+
+spleen_module <- spleen_module[, -1]
+colnames(spleen_module) <- paste0("module", 1:num_spleen_modules)
+dim(spleen_module)
+
+# 3. OVERLAP
+
+overlap_mat <- matrix(NA, nrow = num_liver_modules, 
+                      ncol = num_spleen_modules)
+for(i in 1:num_liver_modules){
+  for(j in 1:num_spleen_modules){
+    overlap_mat[i, j] <- sum(liver_module[, i] %in% spleen_module[, j])
+  }
+}
+
+
+######################
+# WRITE FILE!!!
+######################
+you_will_write <- T
+
+if(you_will_write == T){
+  for(i in 1:num_liver_modules){
+    cat(paste0("\n", i, " - In the top ", n_genes, " genes of ", toOrdinal(i), 
+               " LIVER module, ", max(overlap_mat[i, ]), 
+               " genes are identified in the ", 
+               toOrdinal(which.max(overlap_mat[i, ])), 
+               " SPLEEN module: \n"), 
+        file = paste0("~/Documents/projects/spatial-genomics/6623_nmf_result/", 
+                      nmf_model, "_", n_genes, "_overlap_gene_list_6623.txt"), 
+        append = T)
+   
+   cat(liver_module[, i][which(liver_module[, i] %in% 
+                                 spleen_module[, which.max(overlap_mat[i, ])])], 
+       "\n", 
+        file = paste0("~/Documents/projects/spatial-genomics/6623_nmf_result/", 
+                      nmf_model, "_", n_genes, "_overlap_gene_list_6623.txt"), 
+        append = T)
+  }
+}
+@
+
+\section{Analysis: matrix plot}
+
+MATRIX PLOT to look at the gene expression: 
+
+<<>>=
+all_genes <- substring(rownames(liver_data), 6)
+module_genes <- list()
+module_genes_mat_plot <- module_genes_mat_plot_grid <- list()
+
+save_figure <- T
+
+for(i in 1:num_liver_modules){
+  module_genes_i <- liver_module[, i][which(liver_module[, i] %in% spleen_module[, which.max(overlap_mat[i, ])])]
+  if(length(module_genes_i) > 1){
+    
+    plot_mat_i <- rep(NA, length(module_genes_i))
+  
+    for(j in 1:length(unique(liver_obs$CellType))){
+      plot_row_j <- rowMeans(liver_data[which(all_genes %in% module_genes_i), 
+                                        liver_obs$CellType == unique(liver_obs$CellType)[j]])
+      plot_mat_i <- rbind(plot_mat_i, plot_row_j)
+    }
+    
+    plot_mat_i <- plot_mat_i[-1, ]
+    rownames(plot_mat_i) <- unique(liver_obs$CellType)
+    colnames(plot_mat_i) <- substring(colnames(plot_mat_i), 6)
+    module_genes[[i]] <- plot_mat_i
+    
+    plot_mat_i <- plot_mat_i %>% as.data.frame()
+    plot_mat_i$CellType <- rownames(plot_mat_i)
+    plot_mat_i_reshape <- reshape2::melt(plot_mat_i, id.vars = "CellType")
+    module_genes_mat_plot[[i]] <- ggplot(
+      plot_mat_i_reshape,
+      aes(x = variable, y = CellType, fill = value)) +
+      geom_tile(color = "white") +  
+      coord_equal() +
+      scale_fill_viridis(discrete=FALSE) +
+      theme_minimal() +
+      theme(
+        axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.title = element_blank(),
+        legend.position = "none")
+    if(save_figure == T){
+      ggsave(module_genes_mat_plot[[i]],
+             file = paste0("~/Documents/projects/spatial-genomics/6623_nmf_result/",
+                           nmf_model, "_matrix_plot_", n_genes, "/", nmf_model, 
+                           "_", n_genes, "genes_mat_plot_M", i, "_6623.png"),
+          width = 12, height = 4, dpi = 300)
+    }
+    
+    
+    module_genes_mat_plot_grid[[i]] <- ggplot(
+      plot_mat_i_reshape,
+      aes(x = variable, y = CellType, fill = value)) +
+      geom_tile() +  
+      # coord_equal() +
+      scale_fill_viridis(discrete=FALSE) +
+      ggtitle(paste0("Liver Module ", i)) +
+      theme_minimal() +
+      theme(
+        #axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.text.x = element_blank(),
+            axis.title = element_blank(),
+            legend.position = "none")
+  }
+}
+
+if(n_genes == 50){
+  if(nmf_model == "brunet"){
+    module_genes_mat_plot_grid <- module_genes_mat_plot_grid[-c(17, 18)]
+  }else if(nmf_model == "pe-nmf"){
+    module_genes_mat_plot_grid <- module_genes_mat_plot_grid[-c(4, 7, 8, 17)]
+  }
+}
+
+liver_mat_plot_grid <- do.call("grid.arrange", c(module_genes_mat_plot_grid, ncol = 4))
+ggsave(file = paste0("~/Documents/projects/spatial-genomics/6623_nmf_result/", 
+                     nmf_model, "_liver_mat_plot_grid_", n_genes, "_6623.pdf"), 
+       liver_mat_plot_grid)
+@
+
+\section{Analysis: Overlap Statistics}
+
+<<>>=
+# heatmap
+overlap_df <- overlap_mat %>% as.data.frame()
+rownames(overlap_df) <- paste0("L ", 1:num_liver_modules)
+colnames(overlap_df) <- paste0("S ", 1:num_spleen_modules)
+
+save_pheatmap_pdf <- function(x, filename) {
+   stopifnot(!missing(x))
+   stopifnot(!missing(filename))
+   pdf(filename)
+   grid::grid.newpage()
+   grid::grid.draw(x$gtable)
+   dev.off()
+}
+
+overlap_heatm <- pheatmap(overlap_df, cluster_cols = T, cluster_rows = T, 
+         show_rownames = T, show_colnames = T, cutree_rows = 1, 
+         clustering.method = "complete",
+         annotation_names_col = FALSE,
+         main = paste0("Overlap of top ", n_genes, " genes"))
+
+save_pheatmap_pdf(overlap_heatm, paste0("~/Documents/projects/spatial-genomics/6623_nmf_result/", nmf_model, "_liver_overlap_heatmap_", n_genes, "_6623.pdf"))
+
+
+# bar plot
+overlap_bar <- data.frame(
+  "Yes" = apply(overlap_mat, 1, max) / n_genes * 100,
+  "No" = (n_genes - apply(overlap_mat, 1, max)) / n_genes * 100)
+overlap_bar_reshape <- reshape2::melt(t(overlap_bar), id.vars = 1)
+colnames(overlap_bar_reshape) <- c("Overlap", "Module", "value")
+overlap_bar_reshape$Module <- as.factor(overlap_bar_reshape$Module)
+ggplot() +
+  geom_bar(data = overlap_bar_reshape, 
+           aes(x = Module, y = value, fill = Overlap),
+           stat = "identity",
+           position = position_stack(reverse = TRUE)) +
+  geom_text(data = data.frame("Yes" = overlap_bar$Yes), 
+            aes(x = 1:num_liver_modules, y = Yes, label = round(Yes, 2)),
+            vjust = 1) +
+  xlab("Liver Module") +
+  ylab("Fraction (%)") +
+  theme_minimal() + 
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 12))
+ggsave(file = paste0("~/Documents/projects/spatial-genomics/6623_nmf_result/", 
+                     nmf_model, "_liver_overlap_barplot_", n_genes, "_6623.png"))
+@
+
+\end{document}
