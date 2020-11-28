@@ -1,0 +1,147 @@
+\documentclass{article}
+
+\begin{document}
+
+<<variable>>=
+nmf_model <- "nsNMF" # "brunet", "pe-nmf", "offset", "nsNMF"
+@
+
+Please specify the NMF method in the very first chunk before you run the script. 
+
+<<package>>=
+library(NMF)
+library(toOrdinal)
+library(tidyverse)
+library(viridis) 
+library(gridExtra)
+library(pheatmap)
+@
+
+Load the pre-saved preprocessed gene expression data and cell covariates, as well 
+as the NMF output generated using the Antaeus server in Song Lab. 
+
+<<data>>=
+liver_mat_nn <- readRDS("~/Documents/projects/spatial-genomics/6623_nmf_result/liver_mat_nn_all_6623.rds")
+nmf_res_liver <- readRDS(paste0("~/Documents/projects/spatial-genomics/6623_nmf_result/seurat_nmf_res_liver_all_6623_", nmf_model, ".rds"))
+nmf_res_liver@fit
+# <Object of class:NMFstd>
+# features: 18276 
+# basis/rank: 20 
+# samples: 6524 
+dim(liver_mat_nn) # 18276 genes by 6524 cells
+
+liver_data <- readRDS("~/Documents/projects/spatial-genomics/6623_nmf_result/liver_allCellType_lognormalized_data_6623.rds")
+liver_obs <- readRDS("~/Documents/projects/spatial-genomics/6623_nmf_result/liver_allCellType_obs_6623.rds")
+dim(liver_data) # 18276 genes by 6524 cells
+class(liver_data)
+dim(liver_obs) # 6524 cells by 28 annotations
+@
+
+<<module>>=
+# 1. LIVER MODULE: 
+s_liver_max <- extractFeatures(nmf_res_liver, method = "max")
+length(s_liver_max) # 20
+
+######################
+# WRITE FILE!!!
+######################
+you_will_write <- F
+
+if(you_will_write == T){
+  for(i in 1:length(s_liver_max)){
+    cat(paste0("\n", i, " - There are ", length(s_liver_max[[i]]), 
+               " genes selected in the ", toOrdinal(i), " LIVER module: \n"),
+        file = paste0(
+          "~/Documents/projects/spatial-genomics/6623_nmf_result/top_contributing_genes/",
+          nmf_model, "_liver_top_contributing_gene_list.txt"),
+        append = T)
+    
+    cat(substring(rownames(liver_mat_nn)[s_liver_max[[i]]], 6),
+        "\n",
+        file = paste0(
+          "~/Documents/projects/spatial-genomics/6623_nmf_result/top_contributing_genes/",
+          nmf_model, "_liver_top_contributing_gene_list.txt"),
+        append = T)
+  }
+}
+@
+
+\section{Analysis: matrix plot}
+
+MATRIX PLOT to look at the gene expression: 
+
+<<>>=
+all_genes <- substring(rownames(liver_data), 6)
+module_genes <- list()
+module_genes_mat_plot <- module_genes_mat_plot_grid <- list()
+
+length(s_liver_max) # 20 
+
+save_figure <- F
+
+for(i in 1:length(s_liver_max)){
+  module_genes_i <- substring(rownames(liver_mat_nn)[s_liver_max[[i]]], 6)
+  
+  # module_genes_i <- liver_module[, i][which(liver_module[, i] %in% spleen_module[, which.max(overlap_mat[i, ])])]
+  if(length(module_genes_i) > 1){
+    
+    plot_mat_i <- rep(NA, length(module_genes_i))
+  
+    for(j in 1:length(unique(liver_obs$CellType))){
+      plot_row_j <- rowMeans(liver_data[which(all_genes %in% module_genes_i), 
+                                        liver_obs$CellType == unique(liver_obs$CellType)[j]])
+      plot_mat_i <- rbind(plot_mat_i, plot_row_j)
+    }
+    
+    plot_mat_i <- plot_mat_i[-1, ]
+    rownames(plot_mat_i) <- unique(liver_obs$CellType)
+    colnames(plot_mat_i) <- substring(colnames(plot_mat_i), 6)
+    module_genes[[i]] <- plot_mat_i
+    
+    plot_mat_i <- plot_mat_i %>% as.data.frame()
+    plot_mat_i$CellType <- rownames(plot_mat_i)
+    plot_mat_i_reshape <- reshape2::melt(plot_mat_i, id.vars = "CellType")
+    module_genes_mat_plot[[i]] <- ggplot(
+      plot_mat_i_reshape,
+      aes(x = variable, y = CellType, fill = value)) +
+      geom_tile(color = "white") +  
+      coord_equal() +
+      scale_fill_viridis(discrete=FALSE) +
+      theme_minimal() +
+      theme(
+        axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.title = element_blank(),
+        legend.position = "none")
+    if(save_figure == T){
+      ggsave(module_genes_mat_plot[[i]],
+             file = paste0("~/Documents/projects/spatial-genomics/6623_nmf_result/top_contributing_genes/svg_",
+                           nmf_model, "_liver/", nmf_model, "_liver_top_contributing_matrix_plot_M", 
+                           i, "_6623.svg"),
+         width = 12, height = 4, dpi = 300)
+    }
+    
+    
+    module_genes_mat_plot_grid[[i]] <- ggplot(
+      plot_mat_i_reshape,
+      aes(x = variable, y = CellType, fill = value)) +
+      geom_tile() +  
+      # coord_equal() +
+      scale_fill_viridis(discrete=FALSE) +
+      ggtitle(paste0("Liver Module ", i)) +
+      theme_minimal() +
+      theme(
+        #axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.text.x = element_blank(),
+            axis.title = element_blank(),
+            legend.position = "none")
+  }
+}
+
+
+liver_mat_plot_grid <- do.call("grid.arrange", c(module_genes_mat_plot_grid, ncol = 4))
+ggsave(file = paste0("~/Documents/projects/spatial-genomics/6623_nmf_result/", 
+                     nmf_model, "_liver_mat_plot_grid_", n_genes, "_6623.pdf"), 
+       liver_mat_plot_grid)
+@
+
+\end{document}

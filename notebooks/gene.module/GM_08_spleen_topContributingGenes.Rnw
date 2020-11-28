@@ -1,0 +1,145 @@
+\documentclass{article}
+
+\begin{document}
+
+<<variable>>=
+nmf_model <- "nsNMF" # "brunet", "pe-nmf", "offset", "nsNMF"
+@
+
+Please specify the NMF method in the very first chunk before you run the script. 
+
+<<package>>=
+library(NMF)
+library(toOrdinal)
+library(tidyverse)
+library(viridis) 
+library(gridExtra)
+library(pheatmap)
+@
+
+Load the pre-saved preprocessed gene expression data and cell covariates, as well 
+as the NMF output generated using the Antaeus server in Song Lab. 
+
+<<data>>=
+spleen_mat_nn <- readRDS("~/Documents/projects/spatial-genomics/6623_nmf_result/spleen_mat_nn.rds")
+nmf_res_spleen <- readRDS(paste0("~/Documents/projects/spatial-genomics/6623_nmf_result/seurat_nmf_res_spleen_", nmf_model, ".rds") )
+nmf_res_spleen@fit
+# <Object of class:NMFstd>
+# features: 14854 
+# basis/rank: 20 
+# samples: 3394 
+dim(spleen_mat_nn) # 14854 genes by 3394 cells
+
+# from 13_GM_spleen_all-cell-type.Rnw line 125-129
+spleen_data <- readRDS("~/Documents/projects/spatial-genomics/6623_nmf_result/spleen_allCellType_lognormalized_data.rds")
+spleen_obs <- readRDS("~/Documents/projects/spatial-genomics/6623_nmf_result/spleen_allCellType_obs.rds")
+dim(spleen_data) # 14854 genes by 3394 cells
+dim(spleen_obs) # 3394 cells by 28 annotations
+@
+
+<<module>>=
+# SPLEEN MODULE: 
+s_spleen_max <- extractFeatures(nmf_res_spleen, method = "max")
+length(s_spleen_max) # 20
+
+######################
+# WRITE FILE!!!
+######################
+you_will_write <- F
+
+if(you_will_write == T){
+  for(i in 1:length(s_spleen_max)){
+    cat(paste0("\n", i, " - There are ", length(s_spleen_max[[i]]), 
+               " genes selected in the ", toOrdinal(i), " SPLEEN module: \n"),
+        file = paste0(
+          "~/Documents/projects/spatial-genomics/6623_nmf_result/top_contributing_genes/",
+          nmf_model, "_spleen_top_contributing_gene_list.txt"),
+        append = T)
+    
+    cat(substring(rownames(spleen_mat_nn)[s_spleen_max[[i]]], 8),
+        "\n",
+        file = paste0(
+          "~/Documents/projects/spatial-genomics/6623_nmf_result/top_contributing_genes/",
+          nmf_model, "_spleen_top_contributing_gene_list.txt"),
+        append = T)
+  }
+}
+@
+
+\section{Analysis: matrix plot}
+
+MATRIX PLOT to look at the gene expression: 
+
+<<>>=
+all_genes <- substring(rownames(spleen_data), 8)
+module_genes <- list()
+module_genes_mat_plot <- module_genes_mat_plot_grid <- list()
+
+save_figure <- T
+
+for(i in 1:length(s_spleen_max)){
+  module_genes_i <- substring(rownames(spleen_mat_nn)[s_spleen_max[[i]]], 8)
+  
+  # module_genes_i <- liver_module[, i][which(liver_module[, i] %in% spleen_module[, which.max(overlap_mat[i, ])])]
+  if(length(module_genes_i) > 1){
+    
+    plot_mat_i <- rep(NA, length(module_genes_i))
+  
+    for(j in 1:length(unique(spleen_obs$CellType))){
+      plot_row_j <- rowMeans(spleen_data[which(all_genes %in% module_genes_i), 
+                                         spleen_obs$CellType == unique(spleen_obs$CellType)[j]])
+      plot_mat_i <- rbind(plot_mat_i, plot_row_j)
+    }
+    
+    plot_mat_i <- plot_mat_i[-1, ]
+    rownames(plot_mat_i) <- unique(spleen_obs$CellType)
+    colnames(plot_mat_i) <- substring(colnames(plot_mat_i), 8)
+    module_genes[[i]] <- plot_mat_i
+    
+    plot_mat_i <- plot_mat_i %>% as.data.frame()
+    plot_mat_i$CellType <- rownames(plot_mat_i)
+    plot_mat_i_reshape <- reshape2::melt(plot_mat_i, id.vars = "CellType")
+    module_genes_mat_plot[[i]] <- ggplot(
+      plot_mat_i_reshape,
+      aes(x = variable, y = CellType, fill = value)) +
+      geom_tile(color = "white") +  
+      coord_equal() +
+      scale_fill_viridis(discrete=FALSE) +
+      theme_minimal() +
+      theme(
+        axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.title = element_blank(),
+        legend.position = "none")
+    if(save_figure == T){
+      ggsave(module_genes_mat_plot[[i]],
+             file = paste0("~/Documents/projects/spatial-genomics/6623_nmf_result/top_contributing_genes/svg_", 
+                           nmf_model, "_spleen/", nmf_model, "_spleen_top_contributing_matrix_plot_M",
+                           i, ".svg"),
+          width = 12, height = 4, dpi = 300)
+    }
+    
+    
+    module_genes_mat_plot_grid[[i]] <- ggplot(
+      plot_mat_i_reshape,
+      aes(x = variable, y = CellType, fill = value)) +
+      geom_tile() +  
+      # coord_equal() +
+      scale_fill_viridis(discrete=FALSE) +
+      ggtitle(paste0("Spleen Module ", i)) +
+      theme_minimal() +
+      theme(
+        #axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.text.x = element_blank(),
+            axis.title = element_blank(),
+            legend.position = "none")
+  }
+}
+
+
+spleen_mat_plot_grid <- do.call("grid.arrange", c(module_genes_mat_plot_grid, ncol = 4))
+ggsave(file = paste0("~/Documents/projects/spatial-genomics/6623_nmf_result/", 
+                     nmf_model, "_spleen_mat_plot_grid_", n_genes, "_6623.pdf"), 
+       spleen_mat_plot_grid)
+@
+
+\end{document}
